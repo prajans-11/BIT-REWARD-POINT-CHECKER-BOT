@@ -24,15 +24,18 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
+# --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
 
+# --- Start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hi! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
 
+# --- Format the report ---
 def format_report(data):
     lines = [
         f"Roll No        : {data.get('roll','-')}",
@@ -49,27 +52,42 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
+# --- Handle user messages ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
         await update.message.reply_text("Please send a roll number.")
         return
 
+    # Send temporary "please wait" message
+    wait_msg = await update.message.reply_text("⏳ Please wait, fetching your data...")
+
     try:
-        resp = requests.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30)  # increased timeout
+        # Show typing indicator while fetching data
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+        # Optional small delay to make typing visible
+        await asyncio.sleep(1)
+
+        # Fetch data from API
+        resp = requests.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30)
         data = resp.json()
-        print(data)  # optional: debug
+        print(data)
     except Exception as e:
-        await update.message.reply_text(f"❌ Error calling API: {e}")
+        await wait_msg.edit_text(f"❌ Error calling API: {e}")
         return
 
     if not data.get("success"):
-        await update.message.reply_text("❌ " + (data.get("error") or "Student not found."))
+        await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
+    # Format report
     msg = format_report(data["data"])
-    await update.message.reply_text(msg, parse_mode="HTML")
 
+    # Edit the "please wait" message with final report
+    await wait_msg.edit_text(msg, parse_mode="HTML")
+
+# --- Main function ---
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
