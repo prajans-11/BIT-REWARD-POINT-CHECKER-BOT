@@ -1,11 +1,11 @@
 import os
-import requests
+import aiohttp
+import asyncio
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
 from telegram import Update
 from telegram.ext import ContextTypes
-from dotenv import load_dotenv
-import asyncio
 from telegram.constants import ChatAction
+from dotenv import load_dotenv
 
 from flask import Flask
 from threading import Thread
@@ -52,30 +52,50 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Handle user messages ---
+# --- Handle user messages with progress bar ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
         await update.message.reply_text("Please send a roll number.")
         return
 
-    # Send temporary "please wait" message
-    wait_msg = await update.message.reply_text("⏳ Please wait, fetching your data...")
+    # Send initial wait message
+    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
+
+    # Progress bar steps
+    progress_steps = [
+        "[■□□□] 25%",
+        "[■■□□] 50%",
+        "[■■■□] 75%",
+        "[■■■■] 100%"
+    ]
+
+    # Function to animate progress bar
+    async def animate_progress(msg):
+        try:
+            for step in progress_steps:
+                await msg.edit_text(f"⏳ Fetching your data...\n{step}")
+                await asyncio.sleep(0.5)  # delay between steps
+        except:
+            pass  # message already edited with final data
+
+    # Start animation concurrently
+    animation_task = asyncio.create_task(animate_progress(wait_msg))
 
     try:
-        # Show typing indicator while fetching data
+        # Show typing indicator
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-        # Optional small delay to make typing visible
-        await asyncio.sleep(1)
-
-        # Fetch data from API
-        resp = requests.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30)
-        data = resp.json()
-        print(data)
+        # Fetch data asynchronously
+        async with aiohttp.ClientSession() as session:
+            async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30) as resp:
+                data = await resp.json()
     except Exception as e:
+        animation_task.cancel()
         await wait_msg.edit_text(f"❌ Error calling API: {e}")
         return
+
+    animation_task.cancel()  # stop animation
 
     if not data.get("success"):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
@@ -83,17 +103,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Format report
     msg = format_report(data["data"])
-
-    # Edit the "please wait" message with final report
     await wait_msg.edit_text(msg, parse_mode="HTML")
 
 # --- Main function ---
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     print("Bot started...")
-    app.run_polling()
+    app_bot.run_polling()
 
 if __name__ == "__main__":
     keep_alive()
