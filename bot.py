@@ -42,7 +42,7 @@ def format_report(data):
         f"Cum. Points    : {data.get('cumPoints',0)}",
         f"Redeemed       : {data.get('redeemed',0)}",
         f"Balance        : {data.get('balance',0)}",
-        f"Dept-Year Avg  : {data.get('deptYearAvg',0)}",
+        f"Year Avg       : {data.get('yearAvg',0)}",
         f"Status         : {data.get('status','-')}"
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
