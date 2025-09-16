@@ -29,6 +29,9 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
 
+# --- Simple in-memory cache ---
+cache = {}
+
 # --- Start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -52,41 +55,40 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Handle user messages with progress bar ---
+# --- Handle user messages with fast progress bar ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
         await update.message.reply_text("Please send a roll number.")
         return
 
-    # Send initial wait message
+    # Check cache first
+    if roll in cache:
+        await update.message.reply_text(format_report(cache[roll]), parse_mode="HTML")
+        return
+
+    # Send initial wait message with progress bar
     wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
 
     # Progress bar steps
-    progress_steps = [
-        "[■□□□] 25%",
-        "[■■□□] 50%",
-        "[■■■□] 75%",
-        "[■■■■] 100%"
-    ]
+    progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
-    # Function to animate progress bar
+    # Animate progress bar until API responds
     async def animate_progress(msg):
         try:
-            for step in progress_steps:
+            i = 0
+            while True:
+                step = progress_steps[i % len(progress_steps)]
                 await msg.edit_text(f"⏳ Fetching your data...\n{step}")
-                await asyncio.sleep(0.5)  # delay between steps
-        except:
-            pass  # message already edited with final data
+                i += 1
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
 
-    # Start animation concurrently
     animation_task = asyncio.create_task(animate_progress(wait_msg))
 
+    # Show typing indicator
     try:
-        # Show typing indicator
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-
-        # Fetch data asynchronously
         async with aiohttp.ClientSession() as session:
             async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30) as resp:
                 data = await resp.json()
@@ -95,15 +97,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ Error calling API: {e}")
         return
 
-    animation_task.cancel()  # stop animation
+    # Stop animation
+    animation_task.cancel()
 
+    # Display final result
     if not data.get("success"):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    # Format report
-    msg = format_report(data["data"])
-    await wait_msg.edit_text(msg, parse_mode="HTML")
+    # Store in cache
+    cache[roll] = data["data"]
+
+    await wait_msg.edit_text(format_report(data["data"]), parse_mode="HTML")
 
 # --- Main function ---
 def main():
