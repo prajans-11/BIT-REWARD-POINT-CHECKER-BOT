@@ -119,7 +119,7 @@ async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
             InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/<YOUR_ADMIN_USERNAME>")
+            InlineKeyboardButton("Contact Admin", url="https://t.me/<testbitbot1")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
