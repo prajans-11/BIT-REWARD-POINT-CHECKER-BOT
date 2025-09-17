@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 # --- Admin ID ---
-ADMIN_ID = 527391234  # <-- replace with your Telegram numeric ID
+ADMIN_ID = 7679681280  # <-- replace with your Telegram numeric ID
 
 # --- Start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
