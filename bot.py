@@ -152,8 +152,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (now, user.id))
     conn.commit()
 
-    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
-    progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
     # if roll in cache:
     #     wait_msg = await update.message.reply_text("⏳ Loading from cache...")
@@ -198,10 +196,10 @@ def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # Remove webhook if exists
-    import telegram
-    bot = telegram.Bot(token=BOT_TOKEN)
-    bot.delete_webhook()
+    # # Remove webhook if exists
+    # import telegram
+    # bot = telegram.Bot(token=BOT_TOKEN)
+    # bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
     app_bot.run_polling()
