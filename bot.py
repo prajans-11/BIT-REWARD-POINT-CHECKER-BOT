@@ -1,23 +1,29 @@
 import os
 import aiohttp
 import asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from dotenv import load_dotenv
 import sqlite3
 from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
+from dotenv import load_dotenv
 
 # --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
-RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your Railway app URL, e.g., https://myapp.up.railway.app
+RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your deployed Railway URL
 
-# --- Simple in-memory cache ---
+# --- In-memory cache ---
 cache = {}
 
-# --- DB Setup ---
+# --- DB setup ---
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute("""
@@ -31,7 +37,7 @@ CREATE TABLE IF NOT EXISTS users (
 conn.commit()
 
 # --- Admin ID ---
-ADMIN_ID = 7679681280  # <-- replace with your Telegram numeric ID
+ADMIN_ID = 7679681280  # Replace with your Telegram numeric ID
 
 # --- Start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -42,14 +48,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         VALUES (?, ?, ?, 0)
     """, (user.id, user.username, now))
     conn.commit()
+
     await update.message.reply_text(
         f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
 
 # --- Stats command (admin only) ---
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
@@ -58,13 +64,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("SELECT user_id, username, last_seen, total_requests FROM users")
     users_list = cursor.fetchall()
-
-    user_lines = []
-    for u in users_list:
-        uid, uname, last_seen, total_req = u
-        display = f"@{uname}" if uname else str(uid)
-        user_lines.append(f"{display} | Last seen: {last_seen} | Requests: {total_req}")
-
+    user_lines = [
+        f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}"
+        for uid, uname, last_seen, total_requests in users_list
+    ]
     user_text = "\n".join(user_lines) if user_lines else "No users yet."
 
     await update.message.reply_text(
@@ -73,8 +76,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Broadcast command (admin only) ---
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
+    if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
         return
 
@@ -85,16 +87,17 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("SELECT user_id FROM users")
     all_users = cursor.fetchall()
-    count = 0
+    sent_count = 0
     for u in all_users:
         try:
             await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
-            count += 1
+            sent_count += 1
         except:
             pass
-    await update.message.reply_text(f"✅ Message sent to {count} users.")
 
-# --- Format the report ---
+    await update.message.reply_text(f"✅ Message sent to {sent_count} users.")
+
+# --- Format student report ---
 def format_report(data):
     lines = [
         f"Roll No        : {data.get('roll','-')}",
@@ -111,7 +114,7 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Send report with inline buttons ---
+# --- Send report with buttons ---
 async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
@@ -122,14 +125,14 @@ async def send_report_with_buttons(update, wait_msg, data):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
-# --- Handle callback queries ---
+# --- Callback query handler ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "check_another":
         await query.message.edit_text("📩 Send your roll number to fetch another report.")
 
-# --- Handle messages with progress bar ---
+# --- Handle messages ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
@@ -188,7 +191,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report_with_buttons(update, wait_msg, data["data"])
 
 # --- Main function ---
-async def main():
+def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
@@ -196,15 +199,14 @@ async def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # --- Automatically set webhook ---
-    webhook_url = f"{RAILWAY_URL}/{BOT_TOKEN}"
-    print(f"Setting webhook to: {webhook_url}")
-    await app_bot.bot.set_webhook(url=webhook_url)
+    print("Bot started on webhook...")
 
-    print("Bot started and webhook set. Running...")
-    await app_bot.start()
-    await app_bot.updater.start_polling()  # fallback if webhook fails
-    await app_bot.updater.idle()
+    # --- Set webhook ---
+    app_bot.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),
+        webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
