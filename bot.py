@@ -152,10 +152,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (now, user.id))
     conn.commit()
 
-    if roll in cache:
-        wait_msg = await update.message.reply_text("⏳ Loading from cache...")
-        await send_report_with_buttons(update, wait_msg, cache[roll])
-        return
+    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
+    progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
+
+    # if roll in cache:
+    #     wait_msg = await update.message.reply_text("⏳ Loading from cache...")
+    #     await send_report_with_buttons(update, wait_msg, cache[roll])
+    #     return
 
     wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
