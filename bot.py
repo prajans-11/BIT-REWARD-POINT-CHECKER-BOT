@@ -1,14 +1,16 @@
 import os
 import aiohttp
 import asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
-from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 from dotenv import load_dotenv
 
 from flask import Flask
 from threading import Thread
+import sqlite3
+from datetime import datetime
 
 # --- Keep-alive server ---
 app = Flask("")
@@ -18,7 +20,7 @@ def home():
     return "Bot is running!"
 
 def run():
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 def keep_alive():
     t = Thread(target=run)
@@ -28,15 +30,88 @@ def keep_alive():
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
+RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your deployed Railway URL
 
 # --- Simple in-memory cache ---
 cache = {}
 
+# --- DB Setup ---
+conn = sqlite3.connect("users.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    last_seen TEXT,
+    total_requests INTEGER DEFAULT 0
+)
+""")
+conn.commit()
+
+# --- Admin ID ---
+ADMIN_ID = 527391234  # <-- replace with your Telegram numeric ID
+
 # --- Start command ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        INSERT OR IGNORE INTO users (user_id, username, last_seen, total_requests)
+        VALUES (?, ?, ?, 0)
+    """, (user.id, user.username, now))
+    conn.commit()
+
     await update.message.reply_text(
-        "👋 Hi! Send your roll number (e.g., 7376221CS259) to get your student report."
+        f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
+
+# --- Stats command (admin only) ---
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+
+    cursor.execute("SELECT user_id, username, last_seen, total_requests FROM users")
+    users_list = cursor.fetchall()
+
+    user_lines = []
+    for u in users_list:
+        uid, uname, last_seen, total_req = u
+        display = f"@{uname}" if uname else str(uid)
+        user_lines.append(f"{display} | Last seen: {last_seen} | Requests: {total_req}")
+
+    user_text = "\n".join(user_lines) if user_lines else "No users yet."
+
+    await update.message.reply_text(
+        f"📊 Total unique users: {total_users}\n\n👥 Users:\n{user_text}"
+    )
+
+# --- Broadcast command (admin only) ---
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    msg = " ".join(context.args)
+    if not msg:
+        await update.message.reply_text("❌ Please provide a message to broadcast.")
+        return
+
+    cursor.execute("SELECT user_id FROM users")
+    all_users = cursor.fetchall()
+    count = 0
+    for u in all_users:
+        try:
+            await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
+            count += 1
+        except:
+            pass  # ignore failures
+    await update.message.reply_text(f"✅ Message sent to {count} users.")
 
 # --- Format the report ---
 def format_report(data):
@@ -55,25 +130,52 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Handle user messages with fast progress bar ---
+# --- Send report with inline buttons ---
+async def send_report_with_buttons(update, wait_msg, data):
+    keyboard = [
+        [
+            InlineKeyboardButton("Check another roll", callback_data="check_another"),
+            InlineKeyboardButton("Contact Admin", url="https://t.me/<YOUR_ADMIN_USERNAME>")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+
+# --- Handle callback queries ---
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "check_another":
+        await query.message.edit_text("📩 Send your roll number to fetch another report.")
+
+# --- Handle messages with progress bar ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
         await update.message.reply_text("Please send a roll number.")
         return
 
-    # Check cache first
+    user = update.effective_user
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute("""
+        INSERT OR IGNORE INTO users (user_id, username, last_seen)
+        VALUES (?, ?, ?)
+    """, (user.id, user.username, now))
+    cursor.execute("""
+        UPDATE users SET last_seen=?, total_requests = total_requests + 1
+        WHERE user_id=?
+    """, (now, user.id))
+    conn.commit()
+
     if roll in cache:
-        await update.message.reply_text(format_report(cache[roll]), parse_mode="HTML")
+        wait_msg = await update.message.reply_text("⏳ Loading from cache...")
+        await send_report_with_buttons(update, wait_msg, cache[roll])
         return
 
-    # Send initial wait message with progress bar
     wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
-
-    # Progress bar steps
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
-    # Animate progress bar until API responds
     async def animate_progress(msg):
         try:
             i = 0
@@ -81,13 +183,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 step = progress_steps[i % len(progress_steps)]
                 await msg.edit_text(f"⏳ Fetching your data...\n{step}")
                 i += 1
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
         except asyncio.CancelledError:
             pass
 
     animation_task = asyncio.create_task(animate_progress(wait_msg))
 
-    # Show typing indicator
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30) as resp:
@@ -97,26 +198,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text(f"❌ Error calling API: {e}")
         return
 
-    # Stop animation
     animation_task.cancel()
 
-    # Display final result
     if not data.get("success"):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    # Store in cache
     cache[roll] = data["data"]
-
-    await wait_msg.edit_text(format_report(data["data"]), parse_mode="HTML")
+    await send_report_with_buttons(update, wait_msg, data["data"])
 
 # --- Main function ---
 def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CommandHandler("stats", stats))
+    app_bot.add_handler(CommandHandler("broadcast", broadcast, pass_args=True))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    print("Bot started...")
-    app_bot.run_polling()
+    app_bot.add_handler(CallbackQueryHandler(button_callback))
+    print("Bot started on webhook...")
+
+    app_bot.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.environ.get("PORT", 8080)),
+        webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
+    )
 
 if __name__ == "__main__":
     keep_alive()
