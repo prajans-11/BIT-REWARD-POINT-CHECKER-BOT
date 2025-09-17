@@ -13,6 +13,7 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
+import telegram
 
 # --- Load environment variables ---
 load_dotenv()
@@ -113,7 +114,7 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Send report with buttons ---
+# --- Send report with buttons and auto-delete ---
 async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
@@ -122,7 +123,14 @@ async def send_report_with_buttons(update, wait_msg, data):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+    msg = await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+
+    # Auto-delete message after 2.5 minutes (150 seconds)
+    await asyncio.sleep(150)
+    try:
+        await msg.delete()
+    except:
+        pass
 
 # --- Callback query handler ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,7 +163,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_report_with_buttons(update, wait_msg, cache[roll])
         return
 
-    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
+    wait_msg = await update.message.reply_text("⏳ Fetching your data...")
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
     async def animate_progress(msg):
@@ -183,8 +191,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Main function ---
-def main():
+# --- Main async function ---
+async def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app_bot.add_handler(CommandHandler("start", start))
@@ -193,13 +201,13 @@ def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # Remove webhook if exists
-    import telegram
+    # Remove webhook properly
     bot = telegram.Bot(token=BOT_TOKEN)
-    bot.delete_webhook()
+    await bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
-    app_bot.run_polling()
+    await app_bot.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
