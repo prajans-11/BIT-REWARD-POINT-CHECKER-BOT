@@ -13,7 +13,6 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
-import telegram
 
 # --- Load environment variables ---
 load_dotenv()
@@ -48,7 +47,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         VALUES (?, ?, ?, 0)
     """, (user.id, user.username, now))
     conn.commit()
-
     await update.message.reply_text(
         f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
@@ -64,6 +62,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("SELECT user_id, username, last_seen, total_requests FROM users")
     users_list = cursor.fetchall()
+
     user_lines = [
         f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}"
         for uid, uname, last_seen, total_requests in users_list
@@ -88,6 +87,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT user_id FROM users")
     all_users = cursor.fetchall()
     sent_count = 0
+
     for u in all_users:
         try:
             await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
@@ -100,21 +100,21 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Format student report ---
 def format_report(data):
     lines = [
-        f"Roll No        : {data.get('roll','-')}",
-        f"Student Name   : {data.get('studentName','-')}",
-        f"Course Code    : {data.get('courseCode','-')}",
-        f"Department     : {data.get('department','-')}",
-        f"Year           : {data.get('year','-')}",
-        f"Mentor         : {data.get('mentor','-')}",
-        f"Cum. Points    : {data.get('cumPoints',0)}",
-        f"Redeemed       : {data.get('redeemed',0)}",
-        f"Balance        : {data.get('balance',0)}",
-        f"Year Avg       : {data.get('yearAvg',0)}",
-        f"Status         : {data.get('status','-')}"
+        f"Roll No : {data.get('roll','-')}",
+        f"Student Name : {data.get('studentName','-')}",
+        f"Course Code : {data.get('courseCode','-')}",
+        f"Department : {data.get('department','-')}",
+        f"Year : {data.get('year','-')}",
+        f"Mentor : {data.get('mentor','-')}",
+        f"Cum. Points : {data.get('cumPoints',0)}",
+        f"Redeemed : {data.get('redeemed',0)}",
+        f"Balance : {data.get('balance',0)}",
+        f"Year Avg : {data.get('yearAvg',0)}",
+        f"Status : {data.get('status','-')}"
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Send report with buttons and auto-delete ---
+# --- Send report with buttons ---
 async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
@@ -123,14 +123,7 @@ async def send_report_with_buttons(update, wait_msg, data):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg = await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
-
-    # Auto-delete message after 2.5 minutes (150 seconds)
-    await asyncio.sleep(150)
-    try:
-        await msg.delete()
-    except:
-        pass
+    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
 # --- Callback query handler ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,6 +141,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     cursor.execute("""
         INSERT OR IGNORE INTO users (user_id, username, last_seen)
         VALUES (?, ?, ?)
@@ -163,7 +157,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_report_with_buttons(update, wait_msg, cache[roll])
         return
 
-    wait_msg = await update.message.reply_text("⏳ Fetching your data...")
+    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
     async def animate_progress(msg):
@@ -191,8 +185,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Main async function ---
-async def main():
+# --- Main function ---
+def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app_bot.add_handler(CommandHandler("start", start))
@@ -201,13 +195,13 @@ async def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # Remove webhook properly
+    # Remove webhook if exists
+    import telegram
     bot = telegram.Bot(token=BOT_TOKEN)
-    await bot.delete_webhook()
+    bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
-    await app_bot.run_polling()
+    app_bot.run_polling()
 
-if __name__ == "__main__":  
-    import asyncio
-    asyncio.run(main())
+if __name__ == "__main__":
+    main()
