@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
-RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your deployed Railway URL
 
 # --- In-memory cache ---
 cache = {}
@@ -119,7 +118,7 @@ async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
             InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/<testbitbot1")
+            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -160,15 +159,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
     async def animate_progress(msg):
-        try:
-            i = 0
-            while True:
-                step = progress_steps[i % len(progress_steps)]
-                await msg.edit_text(f"⏳ Fetching your data...\n{step}")
-                i += 1
-                await asyncio.sleep(0.3)
-        except asyncio.CancelledError:
-            pass
+        for step in progress_steps:
+            await msg.edit_text(f"⏳ Fetching your data...\n{step}")
+            await asyncio.sleep(0.5)
 
     animation_task = asyncio.create_task(animate_progress(wait_msg))
 
@@ -193,21 +186,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Main function ---
 def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
+    # Remove webhook if exists
+    import telegram
+    bot = telegram.Bot(token=BOT_TOKEN)
+    bot.delete_webhook()
+
     print("Bot started, now polling for updates...")
     app_bot.run_polling()
-
-    # --- Set webhook ---
-    # app_bot.run_webhook(
-    #     listen="0.0.0.0",
-    #     port=int(os.environ.get("PORT", 8080)),
-    #     webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
-    # )
 
 if __name__ == "__main__":
     main()
