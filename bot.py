@@ -192,7 +192,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report_with_buttons(update, wait_msg, data["data"])
 
 # --- Main function ---
-def main():
+async def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app_bot.add_handler(CommandHandler("start", start))
@@ -201,12 +201,14 @@ def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # Remove webhook properly
+    # Properly delete webhook
     bot = telegram.Bot(token=BOT_TOKEN)
-    asyncio.create_task(bot.delete_webhook())
+    await bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
-    app_bot.run_polling()  # ✅ do NOT use asyncio.run()
+    await app_bot.run_polling()  # run_polling is async, so we await it
 
 if __name__ == "__main__":
-    main()  # just call main directly
+    import asyncio
+    # Run main safely
+    asyncio.run(main()) 
