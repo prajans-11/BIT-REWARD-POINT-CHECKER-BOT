@@ -206,9 +206,13 @@ async def main():
     await bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
-    await app_bot.run_polling()  # run_polling is async, so we await it
+    await app_bot.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    # Run main safely
-    asyncio.run(main()) 
+    try:
+        # If an event loop is already running (like in Railway or Jupyter)
+        loop = asyncio.get_running_loop()
+        loop.create_task(main())
+    except RuntimeError:
+        # If no event loop exists
+        asyncio.run(main())
