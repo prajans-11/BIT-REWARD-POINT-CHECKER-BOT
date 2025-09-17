@@ -4,27 +4,9 @@ import asyncio
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, CallbackQueryHandler
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.constants import ChatAction
 from dotenv import load_dotenv
-
-from flask import Flask
-from threading import Thread
 import sqlite3
 from datetime import datetime
-
-# --- Keep-alive server ---
-app = Flask("")
-
-@app.route("/")
-def home():
-    return "Bot is running!"
-
-def run():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8081)))
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
 
 # --- Load environment variables ---
 load_dotenv()
@@ -110,7 +92,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
             count += 1
         except:
-            pass  # ignore failures
+            pass
     await update.message.reply_text(f"✅ Message sent to {count} users.")
 
 # --- Format the report ---
@@ -224,5 +206,4 @@ def main():
     )
 
 if __name__ == "__main__":
-    keep_alive()
     main()
