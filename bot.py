@@ -199,14 +199,15 @@ def main():
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    print("Bot started on webhook...")
+    print("Bot started, now polling for updates...")
+    app_bot.run_polling()
 
     # --- Set webhook ---
-    app_bot.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
-    )
+    # app_bot.run_webhook(
+    #     listen="0.0.0.0",
+    #     port=int(os.environ.get("PORT", 8080)),
+    #     webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
+    # )
 
 if __name__ == "__main__":
     main()
