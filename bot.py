@@ -191,31 +191,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Main function ---
-if __name__ == "__main__":
-    # Build bot application
+# --- Main async function ---
+async def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Add handlers
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-    # Delete webhook before polling
-    import asyncio
+    # Remove webhook properly
     bot = telegram.Bot(token=BOT_TOKEN)
-    # We run delete_webhook in the current loop
-    async def safe_start():
-        await bot.delete_webhook()
-        print("Bot started, now polling for updates...")
-        await app_bot.run_polling()
+    await bot.delete_webhook()
 
-    # Start the bot in the current loop (Railway has a running loop)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(safe_start())
-    except RuntimeError:
-        # If no loop exists, create one
-        asyncio.run(safe_start())
+    print("Bot started, now polling for updates...")
+    await app_bot.run_polling()
+
+if __name__ == "__main__":  
+    import asyncio
+    asyncio.run(main())
