@@ -12,7 +12,7 @@ from datetime import datetime
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
-RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your deployed Railway URL
+RAILWAY_URL = os.getenv("RAILWAY_URL")  # Your Railway app URL, e.g., https://myapp.up.railway.app
 
 # --- Simple in-memory cache ---
 cache = {}
@@ -42,7 +42,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         VALUES (?, ?, ?, 0)
     """, (user.id, user.username, now))
     conn.commit()
-
     await update.message.reply_text(
         f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
@@ -127,7 +126,6 @@ async def send_report_with_buttons(update, wait_msg, data):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     if query.data == "check_another":
         await query.message.edit_text("📩 Send your roll number to fetch another report.")
 
@@ -190,20 +188,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report_with_buttons(update, wait_msg, data["data"])
 
 # --- Main function ---
-def main():
+async def main():
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
-    print("Bot started on webhook...")
 
-    app_bot.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        webhook_url=f"{RAILWAY_URL}/{BOT_TOKEN}"
-    )
+    # --- Automatically set webhook ---
+    webhook_url = f"{RAILWAY_URL}/{BOT_TOKEN}"
+    print(f"Setting webhook to: {webhook_url}")
+    await app_bot.bot.set_webhook(url=webhook_url)
+
+    print("Bot started and webhook set. Running...")
+    await app_bot.start()
+    await app_bot.updater.start_polling()  # fallback if webhook fails
+    await app_bot.updater.idle()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
