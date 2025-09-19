@@ -203,8 +203,7 @@ app_bot.add_handler(CallbackQueryHandler(button_callback))
 @flask_app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app_bot.bot)
-    loop = asyncio.get_event_loop()
-    loop.create_task(app_bot.process_update(update))
+    asyncio.run(app_bot.process_update(update))  # ✅ Fixes event loop error
     return "ok", 200
 
 # --- Main ---
