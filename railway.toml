@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [deploy]
-startCommand = "python main.py"
+startCommand = "python bot.py"
 restartPolicyType = "ON_FAILURE"
 
 [variables]
