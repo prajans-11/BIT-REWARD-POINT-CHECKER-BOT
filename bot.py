@@ -13,6 +13,7 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
+import io
 
 # --- Load environment variables ---
 load_dotenv()
@@ -69,9 +70,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     user_text = "\n".join(user_lines) if user_lines else "No users yet."
 
-    await update.message.reply_text(
-        f"📊 Total unique users: {total_users}\n\n👥 Users:\n{user_text}"
-    )
+    # Prepare file content
+    file_content = f"📊 Total unique users: {total_users}\n\n👥 Users:\n{user_text}"
+    file = io.BytesIO(file_content.encode("utf-8"))
+    file.name = "stats.txt"
+
+    await update.message.reply_document(document=file, caption="📊 Stats Report")
 
 # --- Broadcast command (admin only) ---
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -152,12 +156,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (now, user.id))
     conn.commit()
 
-
-    # if roll in cache:
-    #     wait_msg = await update.message.reply_text("⏳ Loading from cache...")
-    #     await send_report_with_buttons(update, wait_msg, cache[roll])
-    #     return
-
     wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
     progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
@@ -195,11 +193,6 @@ def main():
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
-
-    # # Remove webhook if exists
-    # import telegram
-    # bot = telegram.Bot(token=BOT_TOKEN)
-    # bot.delete_webhook()
 
     print("Bot started, now polling for updates...")
     app_bot.run_polling()
