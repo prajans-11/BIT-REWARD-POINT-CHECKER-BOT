@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -13,12 +14,13 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
-import io
+from flask import Flask, request
 
 # --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app-name.up.railway.app/webhook
 
 # --- In-memory cache ---
 cache = {}
@@ -64,18 +66,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT user_id, username, last_seen, total_requests FROM users")
     users_list = cursor.fetchall()
 
+    if not users_list:
+        await update.message.reply_text("📊 No users yet.")
+        return
+
     user_lines = [
         f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}"
         for uid, uname, last_seen, total_requests in users_list
     ]
-    user_text = "\n".join(user_lines) if user_lines else "No users yet."
 
-    # Prepare file content
-    file_content = f"📊 Total unique users: {total_users}\n\n👥 Users:\n{user_text}"
-    file = io.BytesIO(file_content.encode("utf-8"))
-    file.name = "stats.txt"
+    header = f"📊 Total unique users: {total_users}\n\n👥 Users:\n"
+    text = header + "\n".join(user_lines)
 
-    await update.message.reply_document(document=file, caption="📊 Stats Report")
+    for i in range(0, len(text), 4000):  # Split if too long
+        await update.message.reply_text(text[i:i+4000])
 
 # --- Broadcast command (admin only) ---
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,18 +188,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Main function ---
+# --- Flask app for webhook ---
+flask_app = Flask(__name__)
+app_bot: Application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+# Register handlers
+app_bot.add_handler(CommandHandler("start", start))
+app_bot.add_handler(CommandHandler("stats", stats))
+app_bot.add_handler(CommandHandler("broadcast", broadcast))
+app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+app_bot.add_handler(CallbackQueryHandler(button_callback))
+
+@flask_app.post("/webhook")
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app_bot.bot)
+    asyncio.get_event_loop().create_task(app_bot.process_update(update))
+    return "ok"
+
+# --- Main ---
+async def set_webhook():
+    await app_bot.bot.set_webhook(WEBHOOK_URL)
+
 def main():
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("stats", stats))
-    app_bot.add_handler(CommandHandler("broadcast", broadcast))
-    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app_bot.add_handler(CallbackQueryHandler(button_callback))
-
-    print("Bot started, now polling for updates...")
-    app_bot.run_polling()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook())
+    print("Bot started with webhook...")
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
 if __name__ == "__main__":
     main()
