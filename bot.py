@@ -199,15 +199,12 @@ app_bot.add_handler(CommandHandler("broadcast", broadcast))
 app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-@flask_app.post("/webhook")
+# Single webhook endpoint
+@flask_app.route("/webhook", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app_bot.bot)
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app_bot.bot)
-    import asyncio
-    asyncio.run(app_bot.process_update(update))
+    loop = asyncio.get_event_loop()
+    loop.create_task(app_bot.process_update(update))
     return "ok", 200
 
 # --- Main ---
