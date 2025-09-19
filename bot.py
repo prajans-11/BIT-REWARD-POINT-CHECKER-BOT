@@ -1,3 +1,5 @@
+# bot.py
+
 import os
 import aiohttp
 import asyncio
@@ -14,13 +16,15 @@ from telegram.ext import (
     filters
 )
 from dotenv import load_dotenv
-from flask import Flask, request
+from fastapi import FastAPI, Request
+import uvicorn
 
 # --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app-name.up.railway.app/webhook
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://your-app.up.railway.app/webhook
+PORT = int(os.environ.get("PORT", 5000))
 
 # --- In-memory cache ---
 cache = {}
@@ -41,7 +45,8 @@ conn.commit()
 # --- Admin ID ---
 ADMIN_ID = 7679681280  # Replace with your Telegram numeric ID
 
-# --- Start command ---
+# --- Bot Handlers ---
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -54,7 +59,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
 
-# --- Stats command (admin only) ---
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
@@ -78,10 +82,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     header = f"📊 Total unique users: {total_users}\n\n👥 Users:\n"
     text = header + "\n".join(user_lines)
 
-    for i in range(0, len(text), 4000):  # Split if too long
+    for i in range(0, len(text), 4000):
         await update.message.reply_text(text[i:i+4000])
 
-# --- Broadcast command (admin only) ---
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized to use this command.")
@@ -122,7 +125,6 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-# --- Send report with buttons ---
 async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
         [
@@ -133,14 +135,12 @@ async def send_report_with_buttons(update, wait_msg, data):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
-# --- Callback query handler ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "check_another":
         await query.message.edit_text("📩 Send your roll number to fetch another report.")
 
-# --- Handle messages ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = update.message.text.strip()
     if not roll:
@@ -188,8 +188,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Flask app for webhook ---
-flask_app = Flask(__name__)
+# --- FastAPI app ---
+app = FastAPI()
 app_bot: Application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # Register handlers
@@ -199,22 +199,22 @@ app_bot.add_handler(CommandHandler("broadcast", broadcast))
 app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-# Single webhook endpoint
-@flask_app.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app_bot.bot)
-    asyncio.run(app_bot.process_update(update))  # ✅ Fixes event loop error
-    return "ok", 200
+# --- Initialize bot and webhook ---
+async def start_bot():
+    await app_bot.initialize()        # Initialize Telegram Application
+    await app_bot.bot.set_webhook(WEBHOOK_URL)  # Set webhook URL
+    print("Bot initialized and webhook set")
 
-# --- Main ---
-async def set_webhook():
-    await app_bot.bot.set_webhook(WEBHOOK_URL)
+# --- Webhook endpoint ---
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, app_bot.bot)
+    asyncio.create_task(app_bot.process_update(update))  # Schedule task in persistent loop
+    return {"status": "ok"}
 
-def main():
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(set_webhook())
-    print("Bot started with webhook...")
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
+# --- Main entry ---
 if __name__ == "__main__":
-    main()
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_bot())  # Initialize bot before starting server
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
