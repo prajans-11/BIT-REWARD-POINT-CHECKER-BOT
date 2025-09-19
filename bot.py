@@ -202,8 +202,13 @@ app_bot.add_handler(CallbackQueryHandler(button_callback))
 @flask_app.post("/webhook")
 def webhook():
     update = Update.de_json(request.get_json(force=True), app_bot.bot)
-    asyncio.get_event_loop().create_task(app_bot.process_update(update))
-    return "ok"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app_bot.bot)
+    import asyncio
+    asyncio.run(app_bot.process_update(update))
+    return "ok", 200
 
 # --- Main ---
 async def set_webhook():
