@@ -37,9 +37,6 @@ MYSQLDATABASE = os.getenv("MYSQLDATABASE")
 # --- Admin ID ---
 ADMIN_ID = int(os.getenv("ADMIN_ID", 7679681280))
 
-# --- In-memory cache ---
-cache = {}
-
 # --- MySQL pool ---
 pool = None
 
@@ -57,14 +54,24 @@ async def init_db():
     )
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
-            # Safe creation: ignore table if exists
+            # Create table to store user info and multiple reports
             await cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
+                    user_id BIGINT,
                     username VARCHAR(255),
                     last_seen DATETIME,
                     total_requests INT DEFAULT 0,
-                    last_report JSON
+                    last_report JSON,
+                    PRIMARY KEY (user_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS reports (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    user_id BIGINT,
+                    roll_no VARCHAR(50),
+                    report JSON,
+                    created_at DATETIME
                 )
             """)
 
@@ -178,16 +185,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not roll:
         await update.message.reply_text("Please send a roll number.")
         return
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
-    progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
-    async def animate_progress(msg):
-        for step in progress_steps:
-            await msg.edit_text(f"⏳ Fetching your data...\n{step}")
-            await asyncio.sleep(0.5)
+    wait_msg = await update.message.reply_text("⏳ Fetching your data...")
+    
+    # Animate timer emoji while fetching (no progress bar)
+    async def animate_timer(msg):
+        symbols = ["⏳", "⌛"]
+        i = 0
+        while True:
+            try:
+                await msg.edit_text(f"{symbols[i%2]} Fetching your data...")
+                i += 1
+                await asyncio.sleep(0.5)
+            except:
+                break
 
-    animation_task = asyncio.create_task(animate_progress(wait_msg))
+    animation_task = asyncio.create_task(animate_timer(wait_msg))
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -204,7 +217,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    # Save last report in DB
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Save last report and append to reports table
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -212,8 +227,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 VALUES (%s, %s, %s, 1, %s)
                 ON DUPLICATE KEY UPDATE last_seen=%s, total_requests=total_requests+1, last_report=%s
             """, (user.id, user.username, now, json.dumps(data["data"]), now, json.dumps(data["data"])))
+            # Append new report to reports table
+            await cur.execute("""
+                INSERT INTO reports (user_id, roll_no, report, created_at)
+                VALUES (%s, %s, %s, %s)
+            """, (user.id, roll, json.dumps(data["data"]), now))
 
-    cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
 # --- Retrieve last report ---
@@ -254,7 +273,6 @@ async def lifespan(app: FastAPI):
     await app_bot.bot.set_webhook(WEBHOOK_URL)
     print("Bot initialized and webhook set ✅")
     yield
-    # optional cleanup on shutdown
     pool.close()
     await pool.wait_closed()
 
