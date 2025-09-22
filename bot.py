@@ -27,21 +27,23 @@ SHEET_API_URL = os.getenv("SHEET_API_URL")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 5000))
 
-# --- MySQL config from Railway ---
+# --- MySQL config ---
 MYSQLHOST = os.getenv("MYSQLHOST")
 MYSQLPORT = int(os.getenv("MYSQLPORT", 3306))
 MYSQLUSER = os.getenv("MYSQLUSER")
 MYSQLPASSWORD = os.getenv("MYSQLPASSWORD")
 MYSQLDATABASE = os.getenv("MYSQLDATABASE")
+
 # --- Admin ID ---
-ADMIN_ID = 7679681280  # Replace with your Telegram numeric ID
+ADMIN_ID = 7679681280
 
 # --- In-memory cache ---
 cache = {}
 
-# --- MySQL pool ---
-pool = None
+# --- Global MySQL pool ---
+pool: aiomysql.Pool = None
 
+# --- Initialize DB ---
 async def init_db():
     global pool
     pool = await aiomysql.create_pool(
@@ -82,13 +84,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 VALUES (%s, %s, %s, 0)
             """, (user.id, user.username, now))
     await update.message.reply_text(
-        f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
+        f"👋 Hi {user.first_name}! Send your roll number to get your student report."
     )
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user) or user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ Not authorized.")
         return
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
@@ -96,66 +98,57 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_users = (await cur.fetchone())[0]
             await cur.execute("SELECT user_id, username, last_seen, total_requests FROM users")
             users_list = await cur.fetchall()
-    if not users_list:
-        await update.message.reply_text("📊 No users yet.")
-        return
-    user_lines = [
-        f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}"
-        for uid, uname, last_seen, total_requests in users_list
-    ]
-    header = f"📊 Total unique users: {total_users}\n\n👥 Users:\n"
-    text = header + "\n".join(user_lines)
+    text = f"📊 Total users: {total_users}\n\n"
+    for uid, uname, last_seen, total_requests in users_list:
+        text += f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}\n"
     for i in range(0, len(text), 4000):
         await update.message.reply_text(text[i:i+4000])
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user) or user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ Not authorized.")
         return
     msg = " ".join(context.args)
     if not msg:
-        await update.message.reply_text("❌ Please provide a message to broadcast.")
+        await update.message.reply_text("❌ Provide a message to broadcast.")
         return
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("SELECT user_id FROM users")
             all_users = await cur.fetchall()
-    sent_count = 0
+    sent = 0
     for u in all_users:
         try:
             await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
-            sent_count += 1
+            sent += 1
         except:
             pass
-    await update.message.reply_text(f"✅ Message sent to {sent_count} users.")
+    await update.message.reply_text(f"✅ Sent to {sent} users.")
 
-# --- Format student report ---
 def format_report(data):
     lines = [
-        f"Roll No : {data.get('roll','-')}",
-        f"Student Name : {data.get('studentName','-')}",
-        f"Course Code : {data.get('courseCode','-')}",
-        f"Department : {data.get('department','-')}",
-        f"Year : {data.get('year','-')}",
-        f"Mentor : {data.get('mentor','-')}",
-        f"Cum. Points : {data.get('cumPoints',0)}",
-        f"Redeemed : {data.get('redeemed',0)}",
-        f"Balance : {data.get('balance',0)}",
-        f"Year Avg : {data.get('yearAvg',0)}",
-        f"Status : {data.get('status','-')}"
+        f"Roll No: {data.get('roll','-')}",
+        f"Name: {data.get('studentName','-')}",
+        f"Course: {data.get('courseCode','-')}",
+        f"Dept: {data.get('department','-')}",
+        f"Year: {data.get('year','-')}",
+        f"Mentor: {data.get('mentor','-')}",
+        f"Cum Points: {data.get('cumPoints',0)}",
+        f"Redeemed: {data.get('redeemed',0)}",
+        f"Balance: {data.get('balance',0)}",
+        f"Year Avg: {data.get('yearAvg',0)}",
+        f"Status: {data.get('status','-')}"
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
 async def send_report_with_buttons(update, wait_msg, data):
     keyboard = [
-        [
-            InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
-        ]
+        [InlineKeyboardButton("Check another roll", callback_data="check_another"),
+         InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+    await wait_msg.edit_text(format_report(data), parse_mode="HTML",
+                             reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -163,25 +156,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "check_another":
         await query.message.edit_text("📩 Send your roll number to fetch another report.")
 
-# --- Handle roll number message ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user):
         return
     roll = update.message.text.strip()
     if not roll:
-        await update.message.reply_text("Please send a roll number.")
+        await update.message.reply_text("Send a roll number.")
         return
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     wait_msg = await update.message.reply_text("⏳ Fetching your data...\n[□□□□] 0%")
-    progress_steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
+    steps = ["[■□□□] 25%", "[■■□□] 50%", "[■■■□] 75%", "[■■■■] 100%"]
 
-    async def animate_progress(msg):
-        for step in progress_steps:
+    async def animate(msg):
+        for step in steps:
             await msg.edit_text(f"⏳ Fetching your data...\n{step}")
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.4)
 
-    animation_task = asyncio.create_task(animate_progress(wait_msg))
+    animation_task = asyncio.create_task(animate(wait_msg))
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -189,7 +180,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data = await resp.json()
     except Exception as e:
         animation_task.cancel()
-        await wait_msg.edit_text(f"❌ Error calling API: {e}")
+        await wait_msg.edit_text(f"❌ API error: {e}")
         return
 
     animation_task.cancel()
@@ -198,7 +189,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    # Save last report in DB
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -210,7 +201,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache[roll] = data["data"]
     await send_report_with_buttons(update, wait_msg, data["data"])
 
-# --- Retrieve last report ---
 async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user):
@@ -220,17 +210,13 @@ async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await cur.execute("SELECT last_report FROM users WHERE user_id=%s", (user.id,))
             result = await cur.fetchone()
     if not result or not result[0]:
-        await update.message.reply_text("❌ No previous report found. Send your roll number first.")
+        await update.message.reply_text("❌ No previous report found.")
         return
     data = json.loads(result[0])
-    keyboard = [
-        [
-            InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+    keyboard = [[InlineKeyboardButton("Check another roll", callback_data="check_another"),
+                 InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")]]
+    await update.message.reply_text(format_report(data), parse_mode="HTML",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
 
 # --- FastAPI app ---
 app = FastAPI()
@@ -244,12 +230,13 @@ app_bot.add_handler(CommandHandler("lastreport", last_report))
 app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 app_bot.add_handler(CallbackQueryHandler(button_callback))
 
-# --- Initialize bot and webhook ---
-async def start_bot():
+# --- FastAPI startup event ---
+@app.on_event("startup")
+async def startup_event():
     await init_db()
     await app_bot.initialize()
     await app_bot.bot.set_webhook(WEBHOOK_URL)
-    print("Bot initialized and webhook set")
+    print("Bot initialized and webhook set ✅")
 
 # --- Webhook endpoint ---
 @app.post("/webhook")
@@ -261,5 +248,5 @@ async def telegram_webhook(request: Request):
 
 # --- Main entry ---
 if __name__ == "__main__":
-    asyncio.run(start_bot())
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    # Only run uvicorn, bot initialized in startup
+    uvicorn.run("bot:app", host="0.0.0.0", port=PORT, reload=False)
