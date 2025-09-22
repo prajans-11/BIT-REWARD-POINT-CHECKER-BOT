@@ -47,9 +47,42 @@ conn.commit()
 # --- Admin ID ---
 ADMIN_ID = 7679681280  # Replace with your Telegram numeric ID
 
-# --- Helper to ignore bots ---
+# --- Helper to ignore other bots ---
 def is_bot(user):
     return user.is_bot
+
+# --- Format student report ---
+def format_report(data):
+    lines = [
+        f"Roll No : {data.get('roll','-')}",
+        f"Student Name : {data.get('studentName','-')}",
+        f"Course Code : {data.get('courseCode','-')}",
+        f"Department : {data.get('department','-')}",
+        f"Year : {data.get('year','-')}",
+        f"Mentor : {data.get('mentor','-')}",
+        f"Cum. Points : {data.get('cumPoints',0)}",
+        f"Redeemed : {data.get('redeemed',0)}",
+        f"Balance : {data.get('balance',0)}",
+        f"Year Avg : {data.get('yearAvg',0)}",
+        f"Status : {data.get('status','-')}"
+    ]
+    return "<pre>\n" + "\n".join(lines) + "\n</pre>"
+
+async def send_report_with_buttons(update, wait_msg, data):
+    keyboard = [
+        [
+            InlineKeyboardButton("Check another roll", callback_data="check_another"),
+            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "check_another":
+        await query.message.edit_text("📩 Send your roll number to fetch another report.")
 
 # --- Bot Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,39 +150,6 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ Message sent to {sent_count} users.")
 
-# --- Format student report ---
-def format_report(data):
-    lines = [
-        f"Roll No : {data.get('roll','-')}",
-        f"Student Name : {data.get('studentName','-')}",
-        f"Course Code : {data.get('courseCode','-')}",
-        f"Department : {data.get('department','-')}",
-        f"Year : {data.get('year','-')}",
-        f"Mentor : {data.get('mentor','-')}",
-        f"Cum. Points : {data.get('cumPoints',0)}",
-        f"Redeemed : {data.get('redeemed',0)}",
-        f"Balance : {data.get('balance',0)}",
-        f"Year Avg : {data.get('yearAvg',0)}",
-        f"Status : {data.get('status','-')}"
-    ]
-    return "<pre>\n" + "\n".join(lines) + "\n</pre>"
-
-async def send_report_with_buttons(update, wait_msg, data):
-    keyboard = [
-        [
-            InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "check_another":
-        await query.message.edit_text("📩 Send your roll number to fetch another report.")
-
 # --- Handle roll number message ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -196,7 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    # Save last report in DB
+    # Save last report to DB immediately
     cursor.execute("""
         UPDATE users SET last_report=? WHERE user_id=?
     """, (json.dumps(data["data"]), user.id))
