@@ -28,11 +28,11 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.environ.get("PORT", 5000))
 
 # --- MySQL config from Railway ---
-MYSQL_HOST = os.getenv("MYSQL_HOST")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", 3306))
-MYSQL_USER = os.getenv("MYSQL_USER")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE")
+MYSQLHOST = os.getenv("MYSQLHOST")
+MYSQLPORT = int(os.getenv("MYSQLPORT", 3306))
+MYSQLUSER = os.getenv("MYSQLUSER")
+MYSQLPASSWORD = os.getenv("MYSQLPASSWORD")
+MYSQLDATABASE = os.getenv("MYSQLDATABASE")
 # --- Admin ID ---
 ADMIN_ID = 7679681280  # Replace with your Telegram numeric ID
 
@@ -45,11 +45,11 @@ pool = None
 async def init_db():
     global pool
     pool = await aiomysql.create_pool(
-        host=MYSQL_HOST,
-        port=MYSQL_PORT,
-        user=MYSQL_USER,
-        password=MYSQL_PASSWORD,
-        db=MYSQL_DB,
+        host=MYSQLHOST,
+        port=MYSQLPORT,
+        user=MYSQLUSER,
+        password=MYSQLPASSWORD,
+        db=MYSQLDATABASE,
         autocommit=True,
         maxsize=10
     )
