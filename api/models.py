@@ -1,6 +1,5 @@
 # api/models.py
 from datetime import datetime
-from bson import ObjectId
 from typing import Optional
 from api.db import get_collection
 
