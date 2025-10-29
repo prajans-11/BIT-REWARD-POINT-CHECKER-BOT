@@ -17,7 +17,6 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 from contextlib import asynccontextmanager
-from mangum import Mangum
 
 # local imports
 from api.models import upsert_user, create_user_if_missing, save_report, get_last_report
@@ -240,8 +239,7 @@ async def telegram_webhook(request: Request):
     asyncio.create_task(app_bot.process_update(update))
     return {"status": "ok"}
 
-# Serverless handler required by Vercel
-handler = Mangum(app)
+# Vercel detects ASGI apps by the exported `app` variable; no extra handler needed.
 
 # local dev support
 if __name__ == "__main__":
