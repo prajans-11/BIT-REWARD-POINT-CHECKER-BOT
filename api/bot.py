@@ -7,7 +7,6 @@ import json
 from fastapi import FastAPI, Request
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -148,42 +147,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # if sending message fails due to transient transport close, continue processing anyway
         wait_msg = update.message
 
-    # start a lightweight typing indicator; refresh every 4s until finished
-    stop_typing = asyncio.Event()
-    async def typing_loop():
-        while not stop_typing.is_set():
-            try:
-                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(stop_typing.wait(), timeout=4)
-            except asyncio.TimeoutError:
-                continue
-
-    typing_task = asyncio.create_task(typing_loop())
-
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=8) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(f"Upstream {resp.status}: {text[:200]}")
                 data = await resp.json()
     except Exception as e:
-        stop_typing.set()
-        try:
-            await typing_task
-        except Exception:
-            pass
         try:
             await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error calling API: {e}")
         except Exception:
             pass
         return
-
-    stop_typing.set()
-    try:
-        await typing_task
-    except Exception:
-        pass
     if not data.get("success"):
         try:
             await context.bot.send_message(chat_id=update.effective_chat.id, text=("❌ " + (data.get("error") or "Student not found.")))
