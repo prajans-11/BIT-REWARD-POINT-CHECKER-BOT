@@ -5,6 +5,7 @@ import aiohttp
 import asyncio
 import aiomysql
 import json
+from fastapi import FastAPI
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -15,10 +16,20 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 import uvicorn
+
+
+app = FastAPI()
+
+@app.get("/")
+def home():
+    return {"message": "FastAPI running on Vercel!"}
+
+
 
 # --- Load environment variables ---
 load_dotenv()
