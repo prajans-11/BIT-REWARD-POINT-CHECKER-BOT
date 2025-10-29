@@ -21,7 +21,6 @@ from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 import uvicorn
 
-
 # --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -287,6 +286,14 @@ async def telegram_webhook(request: Request):
     update = Update.de_json(data, app_bot.bot)
     asyncio.create_task(app_bot.process_update(update))
     return {"status": "ok"}
+
+@app.get("/")
+async def home():
+    return {"status": "running", "message": "FastAPI bot deployed on Vercel ✅"}
+
+from mangum import Mangum
+handler = Mangum(app)
+
 
 # --- Main entry ---
 if __name__ == "__main__":
