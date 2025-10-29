@@ -3,7 +3,6 @@
 import os
 import aiohttp
 import asyncio
-import aiomysql
 import json
 from fastapi import FastAPI, Request
 from datetime import datetime
@@ -20,66 +19,27 @@ from dotenv import load_dotenv
 from contextlib import asynccontextmanager
 from mangum import Mangum
 
+# local imports
+from api.models import upsert_user, create_user_if_missing, save_report, get_last_report
+
 # --- Load environment variables ---
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-SHEET_API_URL = os.getenv("SHEET_API_URL")
-# webhook URL used to register with Telegram (Vercel route)
+SHEET_API_URL = os.getenv("SHEET_API_URL", "")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://bit-reward-point-checker-bot.vercel.app/api/webhook")
 PORT = int(os.environ.get("PORT", 5000))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7679681280"))
 
-# --- MySQL config ---
-MYSQLHOST = os.getenv("MYSQLHOST")
-MYSQLPORT = int(os.getenv("MYSQLPORT", 3306))
-MYSQLUSER = os.getenv("MYSQLUSER")
-MYSQLPASSWORD = os.getenv("MYSQLPASSWORD")
-MYSQLDATABASE = os.getenv("MYSQLDATABASE")
+if not BOT_TOKEN:
+    # Fail gracefully in serverless logs — don't crash deployment immediately
+    print("WARNING: BOT_TOKEN is not set. Bot will not initialize properly until BOT_TOKEN is provided.")
 
-# --- Admin ID ---
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7679681280"))                             
-
-# --- MySQL pool ---
-pool = None
-
-# --- Initialize DB safely ---
-async def init_db():
-    global pool
-    pool = await aiomysql.create_pool(
-        host=MYSQLHOST,
-        port=MYSQLPORT,
-        user=MYSQLUSER,
-        password=MYSQLPASSWORD,
-        db=MYSQLDATABASE,
-        autocommit=True,
-        maxsize=10
-    )
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    username VARCHAR(255),
-                    last_seen DATETIME,
-                    total_requests INT DEFAULT 0,
-                    last_report JSON
-                )
-            """)
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS reports (
-                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-                    user_id BIGINT,
-                    roll_no VARCHAR(50),
-                    report JSON,
-                    created_at DATETIME
-                )
-            """)
+# --- Telegram Bot ---
+app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # --- Helper to ignore bots ---
 def is_bot(user):
     return getattr(user, "is_bot", False)
-
-# --- Telegram Bot ---
-app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # ======================== TELEGRAM HANDLERS ========================
 
@@ -87,13 +47,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user):
         return
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                INSERT IGNORE INTO users (user_id, username, last_seen, total_requests)
-                VALUES (%s, %s, %s, 0)
-            """, (user.id, user.username, now))
+    now = datetime.utcnow()
+    await create_user_if_missing(user.id, user.username, now)
     await update.message.reply_text(
         f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
     )
@@ -103,23 +58,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_bot(user) or user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT COUNT(*) FROM users")
-            total_users = (await cur.fetchone())[0]
-            await cur.execute("SELECT user_id, username, last_seen, total_requests FROM users")
-            users_list = await cur.fetchall()
-    if not users_list:
-        await update.message.reply_text("📊 No users yet.")
-        return
-    user_lines = [
-        f"{('@'+uname) if uname else uid} | Last seen: {last_seen} | Requests: {total_requests}"
-        for uid, uname, last_seen, total_requests in users_list
-    ]
-    header = f"📊 Total unique users: {total_users}\n\n👥 Users:\n"
-    text = header + "\n".join(user_lines)
-    for i in range(0, len(text), 4000):
-        await update.message.reply_text(text[i:i+4000])
+    # count users
+    from api.db import get_collection
+    users_col = get_collection("users")
+    total_users = await users_col.count_documents({})
+    await update.message.reply_text(f"📊 Total users: {total_users}")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -130,16 +73,15 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         await update.message.reply_text("❌ Please provide a message to broadcast.")
         return
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT user_id FROM users")
-            all_users = await cur.fetchall()
+    from api.db import get_collection
+    users_col = get_collection("users")
+    cursor = users_col.find({}, {"user_id": 1})
     sent_count = 0
-    for u in all_users:
+    async for doc in cursor:
         try:
-            await context.bot.send_message(chat_id=u[0], text=f"📢 Broadcast:\n{msg}")
+            await context.bot.send_message(chat_id=doc["user_id"], text=f"📢 Broadcast:\n{msg}")
             sent_count += 1
-        except:
+        except Exception:
             pass
     await update.message.reply_text(f"✅ Message sent to {sent_count} users.")
 
@@ -194,7 +136,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.edit_text(f"{symbols[i%2]} Fetching your data...")
                 i += 1
                 await asyncio.sleep(0.5)
-            except:
+            except Exception:
                 break
 
     animation_task = asyncio.create_task(animate_timer(wait_msg))
@@ -214,19 +156,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
         return
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("""
-                INSERT INTO users (user_id, username, last_seen, total_requests, last_report)
-                VALUES (%s, %s, %s, 1, %s)
-                ON DUPLICATE KEY UPDATE last_seen=%s, total_requests=total_requests+1, last_report=%s
-            """, (user.id, user.username, now, json.dumps(data["data"]), now, json.dumps(data["data"])))
-            await cur.execute("""
-                INSERT INTO reports (user_id, roll_no, report, created_at)
-                VALUES (%s, %s, %s, %s)
-            """, (user.id, roll, json.dumps(data["data"]), now))
+    now = datetime.utcnow()
+    # save report in mongo
+    try:
+        await save_report(user.id, roll, data["data"])
+    except Exception as e:
+        await wait_msg.edit_text(f"❌ DB error: {e}")
+        return
 
     await send_report_with_buttons(update, wait_msg, data["data"])
 
@@ -234,14 +170,10 @@ async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user):
         return
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute("SELECT last_report FROM users WHERE user_id=%s", (user.id,))
-            result = await cur.fetchone()
-    if not result or not result[0]:
+    data = await get_last_report(user.id)
+    if not data:
         await update.message.reply_text("❌ No previous report found. Send your roll number first.")
         return
-    data = json.loads(result[0])
     keyboard = [
         [
             InlineKeyboardButton("Check another roll", callback_data="check_another"),
@@ -263,15 +195,25 @@ app_bot.add_handler(CallbackQueryHandler(button_callback))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # initialize DB pool and set webhook
-    await init_db()
-    await app_bot.initialize()
-    # set webhook on telegram to the Vercel route
-    await app_bot.bot.set_webhook(WEBHOOK_URL)
-    print("Bot initialized and webhook set ✅")
+    # do not crash if MONGO not present — raise clear message instead
+    from api.db import get_db
+    try:
+        _ = get_db()  # verifies connection
+    except Exception as e:
+        print("DB connection failed at startup:", e)
+        # allow function to still boot (so we can see logs), but return early
+    # initialize telegram bot and set webhook only if token present
+    try:
+        await app_bot.initialize()
+        if BOT_TOKEN and WEBHOOK_URL:
+            await app_bot.bot.set_webhook(WEBHOOK_URL)
+            print("Bot webhook set to", WEBHOOK_URL)
+        else:
+            print("Skipping set_webhook because BOT_TOKEN or WEBHOOK_URL missing")
+    except Exception as e:
+        print("Telegram init error:", e)
     yield
-    pool.close()
-    await pool.wait_closed()
+    # no DB pool to close (motor handles connections), but we include cleanups if necessary
 
 app = FastAPI(lifespan=lifespan)
 
@@ -283,8 +225,12 @@ async def home():
 # webhook endpoint
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "bad request"}, 400
     update = Update.de_json(data, app_bot.bot)
+    # process in background so webhook returns quickly
     asyncio.create_task(app_bot.process_update(update))
     return {"status": "ok"}
 
