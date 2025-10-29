@@ -23,11 +23,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 
 
-app = FastAPI()
 
-@app.get("/")
-def home():
-    return {"message": "FastAPI running on Vercel!"}
 
 
 
