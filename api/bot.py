@@ -113,7 +113,7 @@ def format_report(data):
     ]
     return "<pre>\n" + "\n".join(lines) + "\n</pre>"
 
-async def send_report_with_buttons(update, wait_msg, data):
+async def send_report_with_buttons(update, context, data):
     keyboard = [
         [
             InlineKeyboardButton("Check another roll", callback_data="check_another"),
@@ -121,7 +121,7 @@ async def send_report_with_buttons(update, wait_msg, data):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await wait_msg.edit_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -153,14 +153,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data = await resp.json()
     except Exception as e:
         try:
-            await wait_msg.edit_text(f"❌ Error calling API: {e}")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error calling API: {e}")
         except Exception:
             pass
         return
 
     if not data.get("success"):
         try:
-            await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=("❌ " + (data.get("error") or "Student not found.")))
         except Exception:
             pass
         return
@@ -171,12 +171,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await save_report(user.id, roll, data["data"])
     except Exception as e:
         try:
-            await wait_msg.edit_text(f"❌ DB error: {e}")
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ DB error: {e}")
         except Exception:
             pass
         return
 
-    await send_report_with_buttons(update, wait_msg, data["data"])
+    await send_report_with_buttons(update, context, data["data"])
 
 async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
