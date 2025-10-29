@@ -147,9 +147,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # if sending message fails due to transient transport close, continue processing anyway
         wait_msg = update.message
 
+    if not SHEET_API_URL:
+        try:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ SHEET_API_URL is not configured.")
+        except Exception:
+            pass
+        return
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=8) as resp:
+            async with session.get(SHEET_API_URL.rstrip("/"), params={"rollNo": roll}, timeout=15) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     raise RuntimeError(f"Upstream {resp.status}: {text[:200]}")
