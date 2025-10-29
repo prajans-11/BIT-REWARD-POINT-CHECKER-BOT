@@ -239,6 +239,11 @@ async def telegram_webhook(request: Request):
     asyncio.create_task(app_bot.process_update(update))
     return {"status": "ok"}
 
+# convenience GET to verify webhook URL in a browser
+@app.get("/api/webhook")
+async def webhook_info():
+    return {"status": "ok", "message": "Send POST requests from Telegram to this endpoint"}
+
 # Vercel detects ASGI apps by the exported `app` variable; no extra handler needed.
 
 # local dev support
