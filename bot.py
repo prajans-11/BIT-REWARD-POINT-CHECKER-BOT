@@ -1,5 +1,4 @@
 # bot.py
-
 import os
 import aiohttp
 import asyncio
@@ -21,10 +20,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 import uvicorn
-
-
-
-
 
 
 # --- Load environment variables ---
