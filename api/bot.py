@@ -147,32 +147,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # if sending message fails due to transient transport close, continue processing anyway
         wait_msg = update.message
 
-    async def animate_timer(msg):
-        symbols = ["⏳", "⌛"]
-        i = 0
-        while True:
-            try:
-                await msg.edit_text(f"{symbols[i%2]} Fetching your data...")
-                i += 1
-                await asyncio.sleep(0.5)
-            except Exception:
-                break
-
-    animation_task = asyncio.create_task(animate_timer(wait_msg))
-
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=30) as resp:
+            async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=8) as resp:
                 data = await resp.json()
     except Exception as e:
-        animation_task.cancel()
         try:
             await wait_msg.edit_text(f"❌ Error calling API: {e}")
         except Exception:
             pass
         return
-
-    animation_task.cancel()
 
     if not data.get("success"):
         try:
