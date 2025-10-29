@@ -7,6 +7,7 @@ import json
 from fastapi import FastAPI, Request
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ChatAction
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -70,7 +71,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_users = await users_col.count_documents({})
         await update.message.reply_text(f"📊 Total users: {total_users}")
     except Exception as e:
-        await update.message.reply_text("⚠️ DB not configured. Set MONGO_URI to enable stats.")
+        await update.message.reply_text(f"⚠️ DB error: {e}. Check MONGO_URI and network access.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -86,7 +87,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_col = get_collection("users")
         cursor = users_col.find({}, {"user_id": 1})
     except Exception:
-        await update.message.reply_text("⚠️ DB not configured. Set MONGO_URI to enable broadcast.")
+        await update.message.reply_text("⚠️ DB error. Set MONGO_URI and ensure access to enable broadcast.")
         return
     sent_count = 0
     async for doc in cursor:
@@ -147,17 +148,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # if sending message fails due to transient transport close, continue processing anyway
         wait_msg = update.message
 
+    # start a lightweight typing indicator; refresh every 4s until finished
+    stop_typing = asyncio.Event()
+    async def typing_loop():
+        while not stop_typing.is_set():
+            try:
+                await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(stop_typing.wait(), timeout=4)
+            except asyncio.TimeoutError:
+                continue
+
+    typing_task = asyncio.create_task(typing_loop())
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(SHEET_API_URL, params={"rollNo": roll}, timeout=8) as resp:
                 data = await resp.json()
     except Exception as e:
+        stop_typing.set()
+        try:
+            await typing_task
+        except Exception:
+            pass
         try:
             await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error calling API: {e}")
         except Exception:
             pass
         return
 
+    stop_typing.set()
+    try:
+        await typing_task
+    except Exception:
+        pass
     if not data.get("success"):
         try:
             await context.bot.send_message(chat_id=update.effective_chat.id, text=("❌ " + (data.get("error") or "Student not found.")))
@@ -203,6 +229,20 @@ if app_bot is not None:
     app_bot.add_handler(CommandHandler("lastreport", last_report))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
+    # /dbstatus command to diagnose DB connectivity
+    async def dbstatus(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if is_bot(update.effective_user) or update.effective_user.id != ADMIN_ID:
+            await update.message.reply_text("❌ You are not authorized.")
+            return
+        try:
+            from api.db import ping_db, get_collection
+            pong = await ping_db()
+            users_col = get_collection("users")
+            total = await users_col.count_documents({})
+            await update.message.reply_text(f"✅ DB OK: {pong}. Users: {total}")
+        except Exception as e:
+            await update.message.reply_text(f"❌ DB error: {e}")
+    app_bot.add_handler(CommandHandler("dbstatus", dbstatus))
     # swallow errors so serverless loop shutdown doesn't bubble up
     async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
         try:

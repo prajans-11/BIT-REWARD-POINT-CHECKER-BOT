@@ -25,3 +25,8 @@ def get_db():
 def get_collection(name: str):
     _ensure_db_initialized()
     return _db[name]
+
+# Simple connectivity check
+async def ping_db():
+    _ensure_db_initialized()
+    return await _db.command("ping")
