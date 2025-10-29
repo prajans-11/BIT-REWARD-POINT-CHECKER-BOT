@@ -4,9 +4,6 @@ from bson import ObjectId
 from typing import Optional
 from api.db import get_collection
 
-users_col = get_collection("users")
-reports_col = get_collection("reports")
-
 async def upsert_user(user_id: int, username: Optional[str], last_seen: datetime, last_report: dict = None):
     query = {"user_id": int(user_id)}
     update = {
@@ -16,9 +13,11 @@ async def upsert_user(user_id: int, username: Optional[str], last_seen: datetime
     if last_report is not None:
         update["$set"]["last_report"] = last_report
     # create with default total_requests=0 if not exists
+    users_col = get_collection("users")
     await users_col.update_one(query, update, upsert=True)
 
 async def create_user_if_missing(user_id: int, username: Optional[str], last_seen: datetime):
+    users_col = get_collection("users")
     doc = await users_col.find_one({"user_id": int(user_id)})
     if not doc:
         await users_col.insert_one({
@@ -37,8 +36,10 @@ async def save_report(user_id: int, roll_no: str, report: dict):
         "report": report,
         "created_at": now
     }
+    reports_col = get_collection("reports")
     res = await reports_col.insert_one(doc)
     # update user's last_report and last_seen + increment count
+    users_col = get_collection("users")
     await users_col.update_one(
         {"user_id": int(user_id)},
         {
@@ -50,6 +51,7 @@ async def save_report(user_id: int, roll_no: str, report: dict):
     return str(res.inserted_id)
 
 async def get_last_report(user_id: int):
+    users_col = get_collection("users")
     user = await users_col.find_one({"user_id": int(user_id)})
     if not user:
         return None

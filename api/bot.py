@@ -35,7 +35,9 @@ if not BOT_TOKEN:
     print("WARNING: BOT_TOKEN is not set. Bot will not initialize properly until BOT_TOKEN is provided.")
 
 # --- Telegram Bot ---
-app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+app_bot = None
+if BOT_TOKEN:
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # --- Helper to ignore bots ---
 def is_bot(user):
@@ -204,8 +206,9 @@ async def lifespan(app: FastAPI):
         # allow function to still boot (so we can see logs), but return early
     # initialize telegram bot and set webhook only if token present
     try:
-        await app_bot.initialize()
-        if BOT_TOKEN and WEBHOOK_URL:
+        if app_bot is not None:
+            await app_bot.initialize()
+        if BOT_TOKEN and WEBHOOK_URL and app_bot is not None:
             await app_bot.bot.set_webhook(WEBHOOK_URL)
             print("Bot webhook set to", WEBHOOK_URL)
         else:
@@ -225,6 +228,8 @@ async def home():
 # webhook endpoint
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
+    if app_bot is None:
+        return {"status": "error", "message": "BOT_TOKEN not configured"}, 500
     try:
         data = await request.json()
     except Exception:
