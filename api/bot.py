@@ -35,6 +35,7 @@ if not BOT_TOKEN:
 
 # --- Telegram Bot ---
 app_bot = None
+APP_BOT_INITIALIZED = False
 if BOT_TOKEN:
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -206,8 +207,10 @@ async def lifespan(app: FastAPI):
         # allow function to still boot (so we can see logs), but return early
     # initialize telegram bot and set webhook only if token present
     try:
-        if app_bot is not None:
+        global APP_BOT_INITIALIZED
+        if app_bot is not None and not APP_BOT_INITIALIZED:
             await app_bot.initialize()
+            APP_BOT_INITIALIZED = True
         if BOT_TOKEN and WEBHOOK_URL and app_bot is not None:
             await app_bot.bot.set_webhook(WEBHOOK_URL)
             print("Bot webhook set to", WEBHOOK_URL)
@@ -230,6 +233,14 @@ async def home():
 async def telegram_webhook(request: Request):
     if app_bot is None:
         return {"status": "error", "message": "BOT_TOKEN not configured"}, 500
+    # Ensure lazy initialization in case startup lifecycle didn't run yet in serverless
+    global APP_BOT_INITIALIZED
+    if not APP_BOT_INITIALIZED:
+        try:
+            await app_bot.initialize()
+            APP_BOT_INITIALIZED = True
+        except Exception as e:
+            return {"status": "error", "message": f"Bot init failed: {e}"}, 500
     try:
         data = await request.json()
     except Exception:
