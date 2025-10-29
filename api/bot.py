@@ -61,10 +61,13 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized.")
         return
     # count users
-    from api.db import get_collection
-    users_col = get_collection("users")
-    total_users = await users_col.count_documents({})
-    await update.message.reply_text(f"📊 Total users: {total_users}")
+    try:
+        from api.db import get_collection
+        users_col = get_collection("users")
+        total_users = await users_col.count_documents({})
+        await update.message.reply_text(f"📊 Total users: {total_users}")
+    except Exception as e:
+        await update.message.reply_text("⚠️ DB not configured. Set MONGO_URI to enable stats.")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -75,9 +78,13 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         await update.message.reply_text("❌ Please provide a message to broadcast.")
         return
-    from api.db import get_collection
-    users_col = get_collection("users")
-    cursor = users_col.find({}, {"user_id": 1})
+    try:
+        from api.db import get_collection
+        users_col = get_collection("users")
+        cursor = users_col.find({}, {"user_id": 1})
+    except Exception:
+        await update.message.reply_text("⚠️ DB not configured. Set MONGO_URI to enable broadcast.")
+        return
     sent_count = 0
     async for doc in cursor:
         try:

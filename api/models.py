@@ -11,21 +11,27 @@ async def upsert_user(user_id: int, username: Optional[str], last_seen: datetime
     }
     if last_report is not None:
         update["$set"]["last_report"] = last_report
-    # create with default total_requests=0 if not exists
-    users_col = get_collection("users")
-    await users_col.update_one(query, update, upsert=True)
+    try:
+        users_col = get_collection("users")
+        await users_col.update_one(query, update, upsert=True)
+    except Exception:
+        # DB not configured or unreachable; ignore to keep bot responsive
+        return
 
 async def create_user_if_missing(user_id: int, username: Optional[str], last_seen: datetime):
-    users_col = get_collection("users")
-    doc = await users_col.find_one({"user_id": int(user_id)})
-    if not doc:
-        await users_col.insert_one({
-            "user_id": int(user_id),
-            "username": username,
-            "last_seen": last_seen,
-            "total_requests": 0,
-            "last_report": None
-        })
+    try:
+        users_col = get_collection("users")
+        doc = await users_col.find_one({"user_id": int(user_id)})
+        if not doc:
+            await users_col.insert_one({
+                "user_id": int(user_id),
+                "username": username,
+                "last_seen": last_seen,
+                "total_requests": 0,
+                "last_report": None
+            })
+    except Exception:
+        return
 
 async def save_report(user_id: int, roll_no: str, report: dict):
     now = datetime.utcnow()
@@ -35,23 +41,28 @@ async def save_report(user_id: int, roll_no: str, report: dict):
         "report": report,
         "created_at": now
     }
-    reports_col = get_collection("reports")
-    res = await reports_col.insert_one(doc)
-    # update user's last_report and last_seen + increment count
-    users_col = get_collection("users")
-    await users_col.update_one(
-        {"user_id": int(user_id)},
-        {
-            "$set": {"last_report": report, "last_seen": now},
-            "$inc": {"total_requests": 1}
-        },
-        upsert=True
-    )
-    return str(res.inserted_id)
+    try:
+        reports_col = get_collection("reports")
+        res = await reports_col.insert_one(doc)
+        users_col = get_collection("users")
+        await users_col.update_one(
+            {"user_id": int(user_id)},
+            {
+                "$set": {"last_report": report, "last_seen": now},
+                "$inc": {"total_requests": 1}
+            },
+            upsert=True
+        )
+        return str(res.inserted_id)
+    except Exception:
+        return None
 
 async def get_last_report(user_id: int):
-    users_col = get_collection("users")
-    user = await users_col.find_one({"user_id": int(user_id)})
-    if not user:
+    try:
+        users_col = get_collection("users")
+        user = await users_col.find_one({"user_id": int(user_id)})
+        if not user:
+            return None
+        return user.get("last_report")
+    except Exception:
         return None
-    return user.get("last_report")
