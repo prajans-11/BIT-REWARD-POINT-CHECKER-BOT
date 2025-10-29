@@ -36,7 +36,7 @@ MYSQLPASSWORD = os.getenv("MYSQLPASSWORD")
 MYSQLDATABASE = os.getenv("MYSQLDATABASE")
 
 # --- Admin ID ---
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7679681280"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7679681280"))                             
 
 # --- MySQL pool ---
 pool = None
