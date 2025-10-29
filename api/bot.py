@@ -51,9 +51,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     now = datetime.utcnow()
     await create_user_if_missing(user.id, user.username, now)
-    await update.message.reply_text(
-        f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
-    )
+    try:
+        await update.message.reply_text(
+            f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
+        )
+    except Exception:
+        pass
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -132,10 +135,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     roll = update.message.text.strip()
     if not roll:
-        await update.message.reply_text("Please send a roll number.")
+        try:
+            await update.message.reply_text("Please send a roll number.")
+        except Exception:
+            pass
         return
 
-    wait_msg = await update.message.reply_text("⏳ Fetching your data...")
+    try:
+        wait_msg = await update.message.reply_text("⏳ Fetching your data...")
+    except Exception:
+        # if sending message fails due to transient transport close, continue processing anyway
+        wait_msg = update.message
 
     async def animate_timer(msg):
         symbols = ["⏳", "⌛"]
@@ -156,13 +166,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data = await resp.json()
     except Exception as e:
         animation_task.cancel()
-        await wait_msg.edit_text(f"❌ Error calling API: {e}")
+        try:
+            await wait_msg.edit_text(f"❌ Error calling API: {e}")
+        except Exception:
+            pass
         return
 
     animation_task.cancel()
 
     if not data.get("success"):
-        await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
+        try:
+            await wait_msg.edit_text("❌ " + (data.get("error") or "Student not found."))
+        except Exception:
+            pass
         return
 
     now = datetime.utcnow()
@@ -170,7 +186,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await save_report(user.id, roll, data["data"])
     except Exception as e:
-        await wait_msg.edit_text(f"❌ DB error: {e}")
+        try:
+            await wait_msg.edit_text(f"❌ DB error: {e}")
+        except Exception:
+            pass
         return
 
     await send_report_with_buttons(update, wait_msg, data["data"])
@@ -200,6 +219,14 @@ if app_bot is not None:
     app_bot.add_handler(CommandHandler("lastreport", last_report))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app_bot.add_handler(CallbackQueryHandler(button_callback))
+    # swallow errors so serverless loop shutdown doesn't bubble up
+    async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            err = getattr(context, "error", None)
+            print("Telegram handler error:", err)
+        except Exception:
+            pass
+    app_bot.add_error_handler(on_error)
 
 # ======================== FASTAPI app with lifespan ========================
 
