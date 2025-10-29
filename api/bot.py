@@ -185,13 +185,14 @@ async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
-# Register handlers
-app_bot.add_handler(CommandHandler("start", start))
-app_bot.add_handler(CommandHandler("stats", stats))
-app_bot.add_handler(CommandHandler("broadcast", broadcast))
-app_bot.add_handler(CommandHandler("lastreport", last_report))
-app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-app_bot.add_handler(CallbackQueryHandler(button_callback))
+# Register handlers only if bot is initialized
+if app_bot is not None:
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CommandHandler("stats", stats))
+    app_bot.add_handler(CommandHandler("broadcast", broadcast))
+    app_bot.add_handler(CommandHandler("lastreport", last_report))
+    app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app_bot.add_handler(CallbackQueryHandler(button_callback))
 
 # ======================== FASTAPI app with lifespan ========================
 
