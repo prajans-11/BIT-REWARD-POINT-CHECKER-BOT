@@ -66,8 +66,9 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # count users
     try:
         from api.db import get_collection
+        import asyncio
         users_col = get_collection("users")
-        total_users = await users_col.count_documents({})
+        total_users = await asyncio.to_thread(users_col.count_documents, {})
         await update.message.reply_text(f"📊 Total users: {total_users}")
     except Exception as e:
         await update.message.reply_text(f"⚠️ DB error: {e}. Check MONGO_URI and network access.")
@@ -83,13 +84,15 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         from api.db import get_collection
+        import asyncio
         users_col = get_collection("users")
-        cursor = users_col.find({}, {"user_id": 1})
+        # fetch all user ids synchronously in a separate thread
+        users = await asyncio.to_thread(lambda: list(users_col.find({}, {"user_id": 1})))
     except Exception:
         await update.message.reply_text("⚠️ DB error. Set MONGO_URI and ensure access to enable broadcast.")
         return
     sent_count = 0
-    async for doc in cursor:
+    for doc in users:
         try:
             await context.bot.send_message(chat_id=doc["user_id"], text=f"📢 Broadcast:\n{msg}")
             sent_count += 1
@@ -218,10 +221,11 @@ if app_bot is not None:
             await update.message.reply_text("❌ You are not authorized.")
             return
         try:
-            from api.db import ping_db, get_collection
-            pong = await ping_db()
+            from api.db import ping_db_sync, get_collection
+            import asyncio
+            pong = await asyncio.to_thread(ping_db_sync)
             users_col = get_collection("users")
-            total = await users_col.count_documents({})
+            total = await asyncio.to_thread(users_col.count_documents, {})
             await update.message.reply_text(f"✅ DB OK: {pong}. Users: {total}")
         except Exception as e:
             await update.message.reply_text(f"❌ DB error: {e}")

@@ -1,5 +1,6 @@
 # api/db.py
 import os
+from pymongo import MongoClient
 
 MONGO_URI = os.getenv("MONGO_URI")
 MONGO_DB = os.getenv("MONGO_DB", "Reward-Bot")
@@ -13,9 +14,8 @@ def _ensure_db_initialized():
         return
     if not MONGO_URI:
         raise RuntimeError("MONGO_URI is not set in environment variables!")
-    # Import motor lazily to avoid import-time failures in serverless cold starts
-    from motor.motor_asyncio import AsyncIOMotorClient
-    _client = AsyncIOMotorClient(MONGO_URI)
+    # Initialize synchronous PyMongo client for serverless stability
+    _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     _db = _client[MONGO_DB]
 
 def get_db():
@@ -26,7 +26,7 @@ def get_collection(name: str):
     _ensure_db_initialized()
     return _db[name]
 
-# Simple connectivity check
-async def ping_db():
+# Simple connectivity check (sync)
+def ping_db_sync():
     _ensure_db_initialized()
-    return await _db.command("ping")
+    return _db.command("ping")
