@@ -25,7 +25,7 @@ from api.models import upsert_user, create_user_if_missing, save_report, get_las
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SHEET_API_URL = os.getenv("SHEET_API_URL", "")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://bit-reward-point-checker-bot.vercel.app/api/webhook")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://bit-reward-point-checker-bot.vercel.app/api/webhook")   
 PORT = int(os.environ.get("PORT", 5000))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7679681280"))
 
@@ -246,8 +246,8 @@ async def telegram_webhook(request: Request):
     except Exception:
         return {"status": "bad request"}, 400
     update = Update.de_json(data, app_bot.bot)
-    # process in background so webhook returns quickly
-    asyncio.create_task(app_bot.process_update(update))
+    # Await processing to keep the event loop alive in serverless
+    await app_bot.process_update(update)
     return {"status": "ok"}
 
 # convenience GET to verify webhook URL in a browser
