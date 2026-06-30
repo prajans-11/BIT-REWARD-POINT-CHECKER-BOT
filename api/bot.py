@@ -104,48 +104,84 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+async def get_stats_message_and_keyboard(page: int):
+    from api.db import get_collection
+    import asyncio
+    
+    users_col = get_collection("users")
+    total_users = await asyncio.to_thread(users_col.count_documents, {})
+    
+    page_size = 10
+    total_pages = max(1, (total_users + page_size - 1) // page_size)
+    
+    # Clamp page
+    if page < 1:
+        page = 1
+    elif page > total_pages:
+        page = total_pages
+        
+    skip = (page - 1) * page_size
+    users = await asyncio.to_thread(
+        lambda: list(users_col.find({}).sort("last_seen", -1).skip(skip).limit(page_size))
+    )
+    
+    msg_text = f"📊 <b>Admin Stats Dashboard</b>\n"
+    msg_text += f"👥 <b>Total Users:</b> <code>{total_users}</code>\n"
+    msg_text += f"───────────────────\n"
+    msg_text += f"👤 <b>Recent Users (Page {page}/{total_pages}):</b>\n\n"
+    
+    for idx, u in enumerate(users, start=skip + 1):
+        username = u.get("username")
+        username_str = f"@{username}" if username else f"ID: {u.get('user_id')}"
+        last_seen = u.get("last_seen")
+        last_seen_str = last_seen.strftime("%b %d, %H:%M") if last_seen else "Unknown"
+        total_reqs = u.get("total_requests", 0)
+        
+        last_rep = u.get("last_report")
+        last_roll = u.get("last_roll")
+        if last_rep:
+            name = last_rep.get("studentName", "-")
+            roll = last_rep.get("roll", "-")
+            checked_str = f"{roll} ({name})"
+        elif last_roll:
+            checked_str = f"{last_roll}"
+        else:
+            checked_str = "None"
+            
+        msg_text += (
+            f"<b>{idx}. {username_str}</b>\n"
+            f" ├ 🕒 Last seen: <code>{last_seen_str}</code>\n"
+            f" ├ 📈 Requests: <code>{total_reqs}</code>\n"
+            f" └ 🔍 Checked: <code>{checked_str}</code>\n\n"
+        )
+        
+    # Build inline keyboard for navigation
+    keyboard = []
+    nav_row = []
+    
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("◀️ Prev", callback_data=f"stats_page_{page-1}"))
+    
+    nav_row.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data="stats_noop"))
+    
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton("Next ▶️", callback_data=f"stats_page_{page+1}"))
+        
+    keyboard.append(nav_row)
+    markup = InlineKeyboardMarkup(keyboard)
+    
+    return msg_text, markup
+
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if is_bot(user) or user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
-    # count users and find most recent
     try:
-        from api.db import get_collection
-        import asyncio
-        users_col = get_collection("users")
-        total_users = await asyncio.to_thread(users_col.count_documents, {})
-        
-        recent_user = await asyncio.to_thread(
-            lambda: users_col.find_one(sort=[("last_seen", -1)])
-        )
-        
-        msg_text = f"📊 <b>Total users</b>: {total_users}"
-        if recent_user:
-            username = recent_user.get("username")
-            username_str = f"@{username}" if username else "No username"
-            last_seen = recent_user.get("last_seen")
-            last_seen_str = last_seen.strftime("%Y-%m-%d %H:%M:%S UTC") if last_seen else "Unknown"
-            total_reqs = recent_user.get("total_requests", 0)
-            
-            last_report = recent_user.get("last_report")
-            report_str = "None"
-            if last_report:
-                roll = last_report.get("roll", "-")
-                name = last_report.get("studentName", "-")
-                report_str = f"Roll: <code>{roll}</code> ({name})"
-                
-            msg_text += (
-                f"\n\n👤 <b>Most Recent User</b>:\n"
-                f"• <b>ID</b>: <code>{recent_user.get('user_id')}</code>\n"
-                f"• <b>Username</b>: {username_str}\n"
-                f"• <b>Last Seen</b>: {last_seen_str}\n"
-                f"• <b>Total Requests</b>: {total_reqs}\n"
-                f"• <b>Last Checked</b>: {report_str}"
-            )
-        await update.message.reply_html(msg_text)
+        msg_text, markup = await get_stats_message_and_keyboard(page=1)
+        await update.message.reply_html(msg_text, reply_markup=markup)
     except Exception as e:
-        await update.message.reply_text(f"⚠️ DB error: {e}. Check MONGO_URI and network access.")
+        await update.message.reply_text(f"⚠️ DB/Stats error: {e}")
 
 async def export_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -341,35 +377,41 @@ async def get_redemption_dates(year):
 async def format_report(data):
     # Emojis for status
     status = data.get('status', '-').strip()
-    status_emoji = "✅" if "pass" in status.lower() or "active" in status.lower() else "ℹ️"
+    status_lower = status.lower()
+    
+    if "pass" in status_lower or "active" in status_lower:
+        status_emoji = "✅"
+    elif "fail" in status_lower or "inactive" in status_lower:
+        status_emoji = "❌"
+    elif "warn" in status_lower or "suspend" in status_lower:
+        status_emoji = "⚠️"
+    else:
+        status_emoji = "ℹ️"
     
     html = (
-        f"💳 <b>REWARD POINTS REPORT</b>\n"
+        f"💳 <b>𝗥𝗘𝗪𝗔𝗥𝗗 𝗣𝗢𝗜𝗡𝗧𝗦 🚀</b>\n"
         f"───────────────────\n"
         f"👤 <b>Student:</b> {data.get('studentName', '-')}\n"
         f"🆔 <b>Roll No:</b> <code>{data.get('roll', '-')}</code>\n"
         f"🏢 <b>Dept:</b> {data.get('department', '-')} ({data.get('year', '-')} Year)\n"
         f"🤝 <b>Mentor:</b> {data.get('mentor', '-')}\n\n"
         
-        f"📊 <b>POINTS SUMMARY</b>\n"
+        f"📊 <b>𝗣𝗢𝗜𝗡𝗧𝗦 𝗦𝗨𝗠𝗠𝗔𝗥𝗬</b>\n"
         f" ├ 🌟 <b>Cumulative:</b> <code>{data.get('cumPoints', 0)}</code> pts\n"
         f" ├ 🛍️ <b>Redeemed:</b> <code>{data.get('redeemed', 0)}</code> pts\n"
         f" ├ 📈 <b>Class Average:</b> <code>{data.get('yearAvg', 0)}</code> pts\n"
-        f" └ 💰 <b>Current Balance:</b> <b>{data.get('balance', 0)}</b> pts\n\n"
+        f" └ 💰 <b>Balance:</b> <b>{data.get('balance', 0)}</b> pts • {status_emoji} <b>{status}</b>\n\n"
     )
     
     redemption = await get_redemption_dates(data.get('year'))
     if redemption:
         html += (
-            f"📅 <b>REDEMPTION DEADLINES ({redemption['sem']})</b>\n"
+            f"📅 <b>𝗥𝗘𝗗𝗘𝗠𝗣𝗧𝗜𝗢𝗡 𝗗𝗘𝗔𝗗𝗟𝗜𝗡𝗘𝗦 ({redemption['sem']})</b>\n"
             f" ├ ⏳ <b>IP 1 Limit:</b> <code>{redemption['ip1']}</code>\n"
             f" └ ⌛ <b>IP 2 Limit:</b> <code>{redemption['ip2']}</code>\n\n"
         )
         
-    html += (
-        f"───────────────────\n"
-        f"📢 <b>Status:</b> {status_emoji} <b>{status}</b>"
-    )
+    html += "───────────────────"
     return html
 
 async def fetch_and_send_report(chat_id: int, user, roll: str, context: ContextTypes.DEFAULT_TYPE, reply_to_message_id: int = None):
@@ -445,6 +487,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("check_saved_"):
         roll = query.data.split("check_saved_")[1]
         await fetch_and_send_report(update.effective_chat.id, query.from_user, roll, context)
+    elif query.data.startswith("stats_page_"):
+        if query.from_user.id != ADMIN_ID:
+            # We don't edit the message for unauthorized users; just send them an alert
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ You are not authorized to view admin stats.")
+            return
+        page = int(query.data.split("stats_page_")[1])
+        try:
+            msg_text, markup = await get_stats_message_and_keyboard(page)
+            await query.message.edit_text(text=msg_text, parse_mode="HTML", reply_markup=markup)
+        except Exception as e:
+            print(f"Error handling stats page callback: {e}")
+    elif query.data == "stats_noop":
+        pass
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
