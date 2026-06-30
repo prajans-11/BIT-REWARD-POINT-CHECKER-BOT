@@ -4,9 +4,11 @@ import os
 import aiohttp
 import asyncio
 import json
+import csv
+import io
 from fastapi import FastAPI, Request
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -39,6 +41,12 @@ APP_BOT_INITIALIZED = False
 if BOT_TOKEN:
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
 
+def get_main_keyboard():
+    keyboard = [
+        [KeyboardButton("🔍 Check Points"), KeyboardButton("🕒 My Last Report")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 # --- Helper to ignore bots ---
 def is_bot(user):
     return getattr(user, "is_bot", False)
@@ -51,12 +59,50 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     now = datetime.utcnow()
     await create_user_if_missing(user.id, user.username, now)
+    
+    # Check if user has a saved roll number in DB
     try:
-        await update.message.reply_text(
-            f"👋 Hi {user.first_name}! Send your roll number (e.g., 7376221CS259) to get your student report."
-        )
+        from api.db import get_collection
+        import asyncio
+        users_col = get_collection("users")
+        doc = await asyncio.to_thread(users_col.find_one, {"user_id": int(user.id)})
+        last_roll = doc.get("last_roll") if doc else None
     except Exception:
-        pass
+        last_roll = None
+        
+    reply_markup = get_main_keyboard()
+    
+    if last_roll:
+        inline_kb = [
+            [
+                InlineKeyboardButton(f"📊 Check {last_roll}", callback_data=f"check_saved_{last_roll}"),
+                InlineKeyboardButton("✏️ Different Roll", callback_data="check_another")
+            ]
+        ]
+        inline_markup = InlineKeyboardMarkup(inline_kb)
+        try:
+            await update.message.reply_html(
+                f"👋 <b>Welcome back, {user.first_name}!</b>\n\n"
+                f"I found your saved Roll Number: <code>{last_roll}</code>\n\n"
+                f"Would you like to check your points for this roll number?",
+                reply_markup=reply_markup
+            )
+            await update.message.reply_html(
+                "👇 Choose an action below:",
+                reply_markup=inline_markup
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            await update.message.reply_html(
+                f"👋 <b>Welcome to BIT Reward Point Checker, {user.first_name}!</b>\n\n"
+                f"Keep track of your reward points, redemptions, and current balance easily.\n\n"
+                f"📝 <i>Please send your Roll Number (e.g. <code>7376221CS259</code>) to fetch your report.</i>",
+                reply_markup=reply_markup
+            )
+        except Exception:
+            pass
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -172,61 +218,172 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
     await update.message.reply_text(f"✅ Message sent to {sent_count} users.")
 
-def format_report(data):
-    lines = [
-        f"Roll No : {data.get('roll','-')}",
-        f"Student Name : {data.get('studentName','-')}",
-        f"Course Code : {data.get('courseCode','-')}",
-        f"Department : {data.get('department','-')}",
-        f"Year : {data.get('year','-')}",
-        f"Mentor : {data.get('mentor','-')}",
-        f"Cum. Points : {data.get('cumPoints',0)}",
-        f"Redeemed : {data.get('redeemed',0)}",
-        f"Balance : {data.get('balance',0)}",
-        f"Year Avg : {data.get('yearAvg',0)}",
-        f"Status : {data.get('status','-')}"
-    ]
-    return "<pre>\n" + "\n".join(lines) + "\n</pre>"
+# Fallback/default dates in case sheet fetching fails
+DEFAULT_REDEMPTION_DATES = {
+    "S7": {"ip1": "29.08.2026", "ip2": "17.10.2026"},
+    "S5": {"ip1": "29.08.2026", "ip2": "17.10.2026"},
+    "S3": {"ip1": "31.08.2026", "ip2": "23.10.2026"},
+    "S1": {"ip1": "Not scheduled (-)", "ip2": "Not scheduled (-)"}
+}
 
-async def send_report_with_buttons(update, context, data):
-    keyboard = [
-        [
-            InlineKeyboardButton("Check another roll", callback_data="check_another"),
-            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+# Cache structure
+_dates_cache = None
+_cache_expiry = None
+CACHE_DURATION = timedelta(minutes=10)
 
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "check_another":
-        await query.message.edit_text("📩 Send your roll number to fetch another report.")
+DETAILS_SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1w6OQ5E0Gus-3eaSErrB3TSBof2MxBwkkHz4X5Hcx-2w/export?format=csv&gid=409527497"
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if is_bot(user):
-        return
-    roll = update.message.text.strip()
-    if not roll:
-        try:
-            await update.message.reply_text("Please send a roll number.")
-        except Exception:
-            pass
-        return
-
+async def fetch_live_redemption_dates():
+    global _dates_cache, _cache_expiry
+    now = datetime.utcnow()
+    
+    if _dates_cache and _cache_expiry and now < _cache_expiry:
+        return _dates_cache
+        
     try:
-        wait_msg = await update.message.reply_text("⏳ Fetching your data...")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(DETAILS_SHEET_CSV_URL, timeout=10) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"HTTP Status {resp.status}")
+                csv_text = await resp.text()
+                
+        # Parse CSV
+        reader = csv.reader(io.StringIO(csv_text))
+        rows = list(reader)
+        
+        sem_row_idx = -1
+        sem_cols = {}
+        
+        for r_idx, row in enumerate(rows):
+            row_cleaned = [c.strip() for c in row]
+            if "Redemption Dates" in row_cleaned:
+                sem_row_idx = r_idx
+                start_col = row_cleaned.index("Redemption Dates") + 1
+                for c_idx in range(start_col, len(row_cleaned)):
+                    val = row_cleaned[c_idx].upper()
+                    if val in ["S7", "S5", "S3", "S1"]:
+                        sem_cols[val] = c_idx
+                break
+                
+        if sem_row_idx == -1 or not sem_cols:
+            raise ValueError("Could not locate 'Redemption Dates' row or sem columns in CSV")
+            
+        ip1_row = None
+        ip2_row = None
+        
+        for row in rows:
+            row_cleaned = [c.strip() for c in row]
+            if any("Last Day for IP 1" in cell or "IP 1 Redemption" in cell for cell in row_cleaned):
+                ip1_row = row_cleaned
+            elif any("Last Day for IP 2" in cell or "IP 2 Redemption" in cell for cell in row_cleaned):
+                ip2_row = row_cleaned
+                
+        if not ip1_row or not ip2_row:
+            raise ValueError("Could not find IP 1 or IP 2 deadline rows in CSV")
+            
+        # Extract dates
+        new_dates = {}
+        for sem in ["S7", "S5", "S3", "S1"]:
+            col_idx = sem_cols.get(sem)
+            if col_idx is not None and col_idx < len(ip1_row) and col_idx < len(ip2_row):
+                ip1_val = ip1_row[col_idx].strip() if ip1_row[col_idx] and ip1_row[col_idx].strip() != "-" else "Not scheduled (-)"
+                ip2_val = ip2_row[col_idx].strip() if ip2_row[col_idx] and ip2_row[col_idx].strip() != "-" else "Not scheduled (-)"
+                new_dates[sem] = {
+                    "ip1": ip1_val,
+                    "ip2": ip2_val
+                }
+            else:
+                new_dates[sem] = {
+                    "ip1": "Not scheduled (-)" if sem == "S1" else DEFAULT_REDEMPTION_DATES[sem]["ip1"],
+                    "ip2": "Not scheduled (-)" if sem == "S1" else DEFAULT_REDEMPTION_DATES[sem]["ip2"]
+                }
+                
+        _dates_cache = new_dates
+        _cache_expiry = now + CACHE_DURATION
+        print("Successfully updated redemption dates from live Google Sheet CSV.")
+        return _dates_cache
+        
+    except Exception as e:
+        print(f"Error fetching live redemption dates: {e}. Using cached/fallback dates.")
+        if _dates_cache:
+            return _dates_cache
+        return DEFAULT_REDEMPTION_DATES
+
+async def get_redemption_dates(year):
+    # Convert year to string and clean it
+    yr_str = str(year).strip().upper()
+    
+    # Fetch current dates mapping
+    dates_map = await fetch_live_redemption_dates()
+    
+    # Mapping based on semester / year
+    if yr_str in ["IV", "4", "4TH"]:
+        sem = "S7"
+    elif yr_str in ["III", "3", "3RD"]:
+        sem = "S5"
+    elif yr_str in ["II", "2", "2ND", "II L", "II-L", "2 L", "2-L", "IIL"]:
+        sem = "S3"
+    elif yr_str in ["I", "1", "1ST"]:
+        sem = "S1"
+    else:
+        return None
+        
+    dates = dates_map.get(sem)
+    if not dates:
+        return None
+        
+    return {
+        "sem": sem,
+        "ip1": dates.get("ip1", "Not scheduled (-)"),
+        "ip2": dates.get("ip2", "Not scheduled (-)")
+    }
+
+async def format_report(data):
+    # Emojis for status
+    status = data.get('status', '-').strip()
+    status_emoji = "✅" if "pass" in status.lower() or "active" in status.lower() else "ℹ️"
+    
+    html = (
+        f"💳 <b>REWARD POINTS REPORT</b>\n"
+        f"───────────────────\n"
+        f"👤 <b>Student:</b> {data.get('studentName', '-')}\n"
+        f"🆔 <b>Roll No:</b> <code>{data.get('roll', '-')}</code>\n"
+        f"🏢 <b>Dept:</b> {data.get('department', '-')} ({data.get('year', '-')} Year)\n"
+        f"🤝 <b>Mentor:</b> {data.get('mentor', '-')}\n\n"
+        
+        f"📊 <b>POINTS SUMMARY</b>\n"
+        f" ├ 🌟 <b>Cumulative:</b> <code>{data.get('cumPoints', 0)}</code> pts\n"
+        f" ├ 🛍️ <b>Redeemed:</b> <code>{data.get('redeemed', 0)}</code> pts\n"
+        f" ├ 📈 <b>Class Average:</b> <code>{data.get('yearAvg', 0)}</code> pts\n"
+        f" └ 💰 <b>Current Balance:</b> <b>{data.get('balance', 0)}</b> pts\n\n"
+    )
+    
+    redemption = await get_redemption_dates(data.get('year'))
+    if redemption:
+        html += (
+            f"📅 <b>REDEMPTION DEADLINES ({redemption['sem']})</b>\n"
+            f" ├ ⏳ <b>IP 1 Limit:</b> <code>{redemption['ip1']}</code>\n"
+            f" └ ⌛ <b>IP 2 Limit:</b> <code>{redemption['ip2']}</code>\n\n"
+        )
+        
+    html += (
+        f"───────────────────\n"
+        f"📢 <b>Status:</b> {status_emoji} <b>{status}</b>"
+    )
+    return html
+
+async def fetch_and_send_report(chat_id: int, user, roll: str, context: ContextTypes.DEFAULT_TYPE, reply_to_message_id: int = None):
+    try:
+        wait_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ Fetching your data...", reply_to_message_id=reply_to_message_id)
     except Exception:
-        # if sending message fails due to transient transport close, continue processing anyway
-        wait_msg = update.message
+        wait_msg = None
 
     if not SHEET_API_URL:
-        try:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ SHEET_API_URL is not configured.")
-        except Exception:
-            pass
+        msg_text = "❌ SHEET_API_URL is not configured."
+        if wait_msg:
+            await wait_msg.edit_text(msg_text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=msg_text)
         return
 
     try:
@@ -237,30 +394,76 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     raise RuntimeError(f"Upstream {resp.status}: {text[:200]}")
                 data = await resp.json()
     except Exception as e:
-        try:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Error calling API: {e}")
-        except Exception:
-            pass
-        return
-    if not data.get("success"):
-        try:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=("❌ " + (data.get("error") or "Student not found.")))
-        except Exception:
-            pass
+        msg_text = f"❌ Error calling API: {e}"
+        if wait_msg:
+            await wait_msg.edit_text(msg_text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=msg_text)
         return
 
-    now = datetime.utcnow()
+    if not data.get("success"):
+        msg_text = "❌ " + (data.get("error") or "Student not found.")
+        if wait_msg:
+            await wait_msg.edit_text(msg_text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=msg_text)
+        return
+
     # save report in mongo
     try:
         await save_report(user.id, roll, data["data"])
     except Exception as e:
-        try:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ DB error: {e}")
-        except Exception:
-            pass
+        msg_text = f"❌ DB error: {e}"
+        if wait_msg:
+            await wait_msg.edit_text(msg_text)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=msg_text)
         return
 
-    await send_report_with_buttons(update, context, data["data"])
+    # Format and send report
+    keyboard = [
+        [
+            InlineKeyboardButton("Check another roll", callback_data="check_another"),
+            InlineKeyboardButton("Contact Admin", url="https://t.me/testbitbot1")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        if wait_msg:
+            await wait_msg.edit_text(text=await format_report(data["data"]), parse_mode="HTML", reply_markup=reply_markup)
+        else:
+            await context.bot.send_message(chat_id=chat_id, text=await format_report(data["data"]), parse_mode="HTML", reply_markup=reply_markup)
+    except Exception:
+        pass
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "check_another":
+        await query.message.reply_html("📩 Please send your Roll Number (e.g. <code>7376221CS259</code>) to fetch your report.")
+    elif query.data.startswith("check_saved_"):
+        roll = query.data.split("check_saved_")[1]
+        await fetch_and_send_report(update.effective_chat.id, query.from_user, roll, context)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if is_bot(user):
+        return
+    text = update.message.text.strip()
+    if not text:
+        return
+        
+    if text == "🔍 Check Points":
+        await update.message.reply_html(
+            "📩 Please send your Roll Number (e.g. <code>7376221CS259</code>) to fetch your report."
+        )
+        return
+    elif text == "🕒 My Last Report":
+        await last_report(update, context)
+        return
+
+    await fetch_and_send_report(update.effective_chat.id, user, text, context, reply_to_message_id=update.message.message_id)
 
 async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -277,7 +480,7 @@ async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(format_report(data), parse_mode="HTML", reply_markup=reply_markup)
+    await update.message.reply_text(await format_report(data), parse_mode="HTML", reply_markup=reply_markup)
 
 # Register handlers only if bot is initialized
 if app_bot is not None:

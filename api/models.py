@@ -29,7 +29,8 @@ async def create_user_if_missing(user_id: int, username: Optional[str], last_see
                 "username": username,
                 "last_seen": last_seen,
                 "total_requests": 0,
-                "last_report": None
+                "last_report": None,
+                "last_roll": None
             })
     except Exception:
         return
@@ -50,7 +51,7 @@ async def save_report(user_id: int, roll_no: str, report: dict):
             users_col.update_one,
             {"user_id": int(user_id)},
             {
-                "$set": {"last_report": report, "last_seen": now},
+                "$set": {"last_report": report, "last_seen": now, "last_roll": roll_no},
                 "$inc": {"total_requests": 1}
             },
             upsert=True
