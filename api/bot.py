@@ -63,15 +63,87 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_bot(user) or user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
-    # count users
+    # count users and find most recent
     try:
         from api.db import get_collection
         import asyncio
         users_col = get_collection("users")
         total_users = await asyncio.to_thread(users_col.count_documents, {})
-        await update.message.reply_text(f"📊 Total users: {total_users}")
+        
+        recent_user = await asyncio.to_thread(
+            lambda: users_col.find_one(sort=[("last_seen", -1)])
+        )
+        
+        msg_text = f"📊 <b>Total users</b>: {total_users}"
+        if recent_user:
+            username = recent_user.get("username")
+            username_str = f"@{username}" if username else "No username"
+            last_seen = recent_user.get("last_seen")
+            last_seen_str = last_seen.strftime("%Y-%m-%d %H:%M:%S UTC") if last_seen else "Unknown"
+            total_reqs = recent_user.get("total_requests", 0)
+            
+            last_report = recent_user.get("last_report")
+            report_str = "None"
+            if last_report:
+                roll = last_report.get("roll", "-")
+                name = last_report.get("studentName", "-")
+                report_str = f"Roll: <code>{roll}</code> ({name})"
+                
+            msg_text += (
+                f"\n\n👤 <b>Most Recent User</b>:\n"
+                f"• <b>ID</b>: <code>{recent_user.get('user_id')}</code>\n"
+                f"• <b>Username</b>: {username_str}\n"
+                f"• <b>Last Seen</b>: {last_seen_str}\n"
+                f"• <b>Total Requests</b>: {total_reqs}\n"
+                f"• <b>Last Checked</b>: {report_str}"
+            )
+        await update.message.reply_html(msg_text)
     except Exception as e:
         await update.message.reply_text(f"⚠️ DB error: {e}. Check MONGO_URI and network access.")
+
+async def export_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if is_bot(user) or user.id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized.")
+        return
+    try:
+        from api.db import get_collection
+        import asyncio
+        import io
+        import csv
+        
+        users_col = get_collection("users")
+        users = await asyncio.to_thread(lambda: list(users_col.find({})))
+        
+        # Build CSV in memory
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["User ID", "Username", "Last Seen", "Total Requests", "Last Roll", "Last Name", "Last Balance"])
+        
+        for u in users:
+            last_rep = u.get("last_report") or {}
+            writer.writerow([
+                u.get("user_id"),
+                u.get("username") or "",
+                u.get("last_seen"),
+                u.get("total_requests", 0),
+                last_rep.get("roll") or "",
+                last_rep.get("studentName") or "",
+                last_rep.get("balance") or 0
+            ])
+            
+        output.seek(0)
+        # Send as document
+        bio = io.BytesIO(output.getvalue().encode('utf-8'))
+        bio.name = "users_report.csv"
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=bio,
+            filename="users_report.csv",
+            caption=f"📊 Current User Database Report ({len(users)} users)"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Export failed: {e}")
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -211,6 +283,7 @@ async def last_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if app_bot is not None:
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
+    app_bot.add_handler(CommandHandler("exportusers", export_users))
     app_bot.add_handler(CommandHandler("broadcast", broadcast))
     app_bot.add_handler(CommandHandler("lastreport", last_report))
     app_bot.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
